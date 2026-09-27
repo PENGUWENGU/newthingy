@@ -104,6 +104,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          STATUS=0
           xcodebuild \
             -project Locus.xcodeproj \
             -scheme Locus \
@@ -117,7 +118,29 @@ jobs:
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             AD_HOC_CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tee build.log
+            build 2>&1 | tee build.log || STATUS=$?
+
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::group::❌ Compilation Errors & Diagnostics"
+            echo "=========================================="
+            echo "       BUILD FAILED - ERROR SUMMARY       "
+            echo "=========================================="
+            grep -E 'error: ' build.log | while IFS= read -r line; do
+              echo "$line"
+              if [[ "$line" =~ ^([^:]+):([0-9]+):([0-9]+):\ error:\ (.*)$ ]]; then
+                FILE="${BASH_REMATCH[1]}"
+                LINE="${BASH_REMATCH[2]}"
+                COL="${BASH_REMATCH[3]}"
+                MSG="${BASH_REMATCH[4]}"
+                echo "::error file=$FILE,line=$LINE,col=$COL::$MSG"
+              fi
+            done
+            echo "=========================================="
+            echo "Last 60 lines of build.log:"
+            tail -n 60 build.log
+            echo "::endgroup::"
+            exit "$STATUS"
+          fi
       - name: Locate built app
         shell: bash
         run: |
