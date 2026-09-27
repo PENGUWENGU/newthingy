@@ -13,8 +13,10 @@ Free and open-source iPhone location teleport. Tap the map, search a place, or d
 
 - One-tap teleport (map pin or place search)
 - Live joystick — walk / run / cycle / drive with light speed variation
-- Walk/Drive routing on real roads & footpaths (MapKit)
-- Draw a path or import / export GPX
+- Walk/Drive routing with 2 creation methods:
+  - **Points**: Tap sequential waypoints on map with road snapping or direct segments, waypoint management, loop, and reverse
+  - **Freehand**: Smooth finger-drag gesture sketching directly on the map in real-time
+- GPX track import & export with high-precision timestamps and elevations
 - Background keep-alive + live status bar + drop alerts
 - Favorites & recents
 - First-run setup walkthrough

@@ -1,6 +1,6 @@
 {
-  "name": "Locus - GPS & Route Simulator",
-  "description": "Web version of Locus: One-tap teleport, live joystick controller, route generation & GPX playback, developer GPS injector simulation, favorites and altitude tuning.",
+  "name": "Locus - iOS Location Teleport & Route Simulator",
+  "description": "Interactive developer location simulation app replicating Locus with live GPS teleporting, virtual joystick, route planning, speed modes, GPX import/export, and developer tunnel telemetry.",
   "permissions": [],
   "capabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

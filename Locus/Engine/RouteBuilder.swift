@@ -2,6 +2,46 @@ import CoreLocation
 import Foundation
 import MapKit
 
+enum RouteMethod: String, CaseIterable, Identifiable {
+    case points = "Points"
+    case freehand = "Freehand"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .points: return "point.topleft.down.to.point.bottomright.curvepath"
+        case .freehand: return "pencil.and.outline"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .points: return "Tap map to add waypoints, snap to roads or direct lines"
+        case .freehand: return "Drag finger smoothly across map to sketch custom route"
+        }
+    }
+}
+
+struct RouteWaypoint: Identifiable, Equatable {
+    let id: UUID
+    var coordinate: CLLocationCoordinate2D
+    var name: String?
+
+    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, name: String? = nil) {
+        self.id = id
+        self.coordinate = coordinate
+        self.name = name
+    }
+
+    static func == (lhs: RouteWaypoint, rhs: RouteWaypoint) -> Bool {
+        lhs.id == rhs.id &&
+        lhs.coordinate.latitude == rhs.coordinate.latitude &&
+        lhs.coordinate.longitude == rhs.coordinate.longitude &&
+        lhs.name == rhs.name
+    }
+}
+
 enum RouteBuilder {
     static func roadRoute(
         from start: CLLocationCoordinate2D,
@@ -17,9 +57,67 @@ enum RouteBuilder {
         let directions = MKDirections(request: request)
         let response = try await directions.calculate()
         guard let route = response.routes.first else {
-            throw NSError(domain: "Locus", code: 1, userInfo: [NSLocalizedDescriptionKey: "No route found"])
+            throw NSError(domain: "Locus", code: 1, userInfo: [NSLocalizedDescriptionKey: "No route found between points"])
         }
         return sample(polyline: route.polyline, every: 12)
+    }
+
+    static func roadRoute(
+        waypoints: [CLLocationCoordinate2D],
+        mode: TravelMode
+    ) async throws -> [CLLocationCoordinate2D] {
+        guard waypoints.count >= 2 else { return waypoints }
+        var combined: [CLLocationCoordinate2D] = []
+
+        for i in 0..<(waypoints.count - 1) {
+            let leg = try await roadRoute(from: waypoints[i], to: waypoints[i + 1], mode: mode)
+            if combined.isEmpty {
+                combined.append(contentsOf: leg)
+            } else {
+                combined.append(contentsOf: leg.dropFirst())
+            }
+        }
+        return combined
+    }
+
+    static func directRoute(
+        waypoints: [CLLocationCoordinate2D],
+        sampleEvery: CLLocationDistance = 10
+    ) -> [CLLocationCoordinate2D] {
+        sample(coordinates: waypoints, every: sampleEvery)
+    }
+
+    static func totalDistance(coordinates: [CLLocationCoordinate2D]) -> CLLocationDistance {
+        guard coordinates.count > 1 else { return 0 }
+        var total: CLLocationDistance = 0
+        for (a, b) in zip(coordinates, coordinates.dropFirst()) {
+            total += CLLocation(latitude: a.latitude, longitude: a.longitude)
+                .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+        }
+        return total
+    }
+
+    static func formattedDistance(_ meters: CLLocationDistance) -> String {
+        if meters < 1000 {
+            return String(format: "%.0f m", meters)
+        } else {
+            return String(format: "%.2f km", meters / 1000.0)
+        }
+    }
+
+    static func formattedDuration(distance: CLLocationDistance, speedMPS: Double) -> String {
+        guard speedMPS > 0, distance > 0 else { return "0s" }
+        let seconds = Int(distance / speedMPS)
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        let secs = seconds % 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        } else if minutes > 0 {
+            return "\(minutes)m \(secs)s"
+        } else {
+            return "\(secs)s"
+        }
     }
 
     static func sample(polyline: MKPolyline, every meters: CLLocationDistance) -> [CLLocationCoordinate2D] {
