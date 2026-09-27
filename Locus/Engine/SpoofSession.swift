@@ -46,7 +46,10 @@ final class SpoofSession: ObservableObject {
     @Published var isBusy = false
     @Published var joystickActive = false
     @Published var isFollowingRoute = false
+    @Published var isRoutePaused = false
     @Published var routeProgress: Double = 0.0
+    @Published var remainingRouteDistance: CLLocationDistance = 0.0
+    @Published var remainingRouteDuration: TimeInterval = 0.0
 
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
@@ -140,7 +143,28 @@ final class SpoofSession: ObservableObject {
         routeTask?.cancel()
         routeTask = nil
         isFollowingRoute = false
+        isRoutePaused = false
         routeProgress = 0.0
+        remainingRouteDistance = 0.0
+        remainingRouteDuration = 0.0
+    }
+
+    func pauseRoute() {
+        guard isFollowingRoute && !isRoutePaused else { return }
+        isRoutePaused = true
+    }
+
+    func resumeRoute() {
+        guard isFollowingRoute && isRoutePaused else { return }
+        isRoutePaused = false
+    }
+
+    func togglePauseRoute() {
+        if isRoutePaused {
+            resumeRoute()
+        } else {
+            pauseRoute()
+        }
     }
 
     /// Best-known real device coordinate (not the teleport pin).
@@ -192,9 +216,21 @@ final class SpoofSession: ObservableObject {
         routeTask?.cancel()
         stopJoystick()
         isFollowingRoute = true
+        isRoutePaused = false
         routeProgress = 0.0
 
-        let speedMPS = currentSpeedMPS
+        let totalRouteDistance = RouteBuilder.totalDistance(of: coordinates)
+        remainingRouteDistance = totalRouteDistance
+        remainingRouteDuration = RouteBuilder.estimatedDuration(distance: totalRouteDistance, speed: currentSpeedMPS)
+
+        // Precompute cumulative suffix distances to quickly compute accurate remaining distance
+        var suffixDistances = [CLLocationDistance](repeating: 0, count: coordinates.count)
+        for i in (0..<(coordinates.count - 1)).reversed() {
+            let seg = CLLocation(latitude: coordinates[i].latitude, longitude: coordinates[i].longitude)
+                .distance(from: CLLocation(latitude: coordinates[i + 1].latitude, longitude: coordinates[i + 1].longitude))
+            suffixDistances[i] = suffixDistances[i + 1] + seg
+        }
+
         routeTask = Task { [weak self] in
             guard let self else { return }
             var shouldContinue = true
@@ -203,18 +239,36 @@ final class SpoofSession: ObservableObject {
                 await MainActor.run {
                     self.apply(previous, pairing: pairing, markRecent: true)
                     self.routeProgress = 0.0
+                    self.remainingRouteDistance = totalRouteDistance
+                    self.remainingRouteDuration = RouteBuilder.estimatedDuration(distance: totalRouteDistance, speed: self.currentSpeedMPS)
                 }
                 let totalSegments = max(1, coordinates.count - 1)
                 for (idx, next) in coordinates.dropFirst().enumerated() {
                     if Task.isCancelled { break }
-                    let distance = CLLocation(latitude: previous.latitude, longitude: previous.longitude)
+
+                    // Pause gate before segment starts
+                    while self.isRoutePaused && !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                    }
+                    if Task.isCancelled { break }
+
+                    let segDist = CLLocation(latitude: previous.latitude, longitude: previous.longitude)
                         .distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude))
+                    let speedMPS = self.currentSpeedMPS
                     var speed = speedMPS * Double.random(in: 0.88...1.12)
                     speed = max(0.8, speed)
                     let stepMeters: CLLocationDistance = min(12, max(4, speed * 0.5))
-                    let steps = max(1, Int(ceil(distance / stepMeters)))
+                    let steps = max(1, Int(ceil(segDist / stepMeters)))
+
                     for i in 1...steps {
                         if Task.isCancelled { break }
+
+                        // Pause gate during steps
+                        while self.isRoutePaused && !Task.isCancelled {
+                            try? await Task.sleep(nanoseconds: 200_000_000)
+                        }
+                        if Task.isCancelled { break }
+
                         let t = Double(i) / Double(steps)
                         let coord = CLLocationCoordinate2D(
                             latitude: previous.latitude + (next.latitude - previous.latitude) * t,
@@ -222,10 +276,24 @@ final class SpoofSession: ObservableObject {
                         )
                         let delay = stepMeters / speed
                         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+
+                        // Pause gate after sleeping
+                        while self.isRoutePaused && !Task.isCancelled {
+                            try? await Task.sleep(nanoseconds: 200_000_000)
+                        }
+                        if Task.isCancelled { break }
+
+                        let remainingInSegment = segDist * (1.0 - t)
+                        let remainingDistance = remainingInSegment + suffixDistances[idx + 1]
+                        let remainingDuration = RouteBuilder.estimatedDuration(distance: remainingDistance, speed: self.currentSpeedMPS)
+
                         await MainActor.run {
                             self.apply(coord, pairing: pairing, markRecent: false)
+                            self.remainingRouteDistance = remainingDistance
+                            self.remainingRouteDuration = remainingDuration
                         }
                     }
+
                     await MainActor.run {
                         self.routeProgress = Double(idx + 1) / Double(totalSegments)
                     }
@@ -237,7 +305,10 @@ final class SpoofSession: ObservableObject {
             }
             await MainActor.run {
                 self.isFollowingRoute = false
+                self.isRoutePaused = false
                 self.routeProgress = 0.0
+                self.remainingRouteDistance = 0.0
+                self.remainingRouteDuration = 0.0
             }
         }
     }

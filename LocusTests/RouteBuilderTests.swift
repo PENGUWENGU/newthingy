@@ -87,4 +87,14 @@ final class RouteBuilderTests: XCTestCase {
         XCTAssertEqual(RouteBuilder.formattedDuration(45), "45s")
         XCTAssertEqual(RouteBuilder.formattedDuration(3665), "1h 1m")
     }
+
+    func testFormattedETA() {
+        let etaShort = RouteBuilder.formattedETA(0.5)
+        XCTAssertEqual(etaShort, "< 1m")
+
+        let etaMinutes = RouteBuilder.formattedETA(120)
+        XCTAssertTrue(etaMinutes.contains("2m 0s"))
+        XCTAssertTrue(etaMinutes.contains("("))
+        XCTAssertTrue(etaMinutes.contains(")"))
+    }
 }

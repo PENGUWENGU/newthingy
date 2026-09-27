@@ -431,7 +431,7 @@ struct MapHomeView: View {
             }
 
             // Route Mode Active Floating Bar
-            if routeModeActive {
+            if routeModeActive || session.isFollowingRoute {
                 routeControlPanel
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -445,146 +445,247 @@ struct MapHomeView: View {
         .padding(.horizontal, 16)
         .padding(.bottom, 2)
         .safeAreaPadding(.top, 8)
-        .animation(.spring(response: 0.32, dampingFraction: 0.8), value: routeModeActive)
+        .animation(.spring(response: 0.32, dampingFraction: 0.8), value: routeModeActive || session.isFollowingRoute)
     }
 
     private var routeControlPanel: some View {
         VStack(spacing: 8) {
-            // Method Switcher: Points vs Freehand
-            HStack(spacing: 8) {
-                Button {
-                    withAnimation { routeMethod = .points }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "mappin.and.ellipse")
-                        Text("Points")
+            if session.isFollowingRoute {
+                // Live Navigation Tracking Bar with ETA and Pause/Resume
+                VStack(spacing: 8) {
+                    HStack(alignment: .center, spacing: 10) {
+                        Image(systemName: session.isRoutePaused ? "pause.circle.fill" : "location.north.line.fill")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(session.isRoutePaused ? .orange : LocusTheme.statusGood)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(session.isRoutePaused ? "PAUSED" : "ETA: \(RouteBuilder.formattedETA(session.remainingRouteDuration))")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(.primary)
+
+                                if session.isRoutePaused {
+                                    Text("(\(RouteBuilder.formattedDuration(session.remainingRouteDuration)) left)")
+                                        .font(.caption.weight(.medium))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
+                            Text("\(RouteBuilder.formattedDistance(session.remainingRouteDistance)) remaining • \(String(format: "%.1f", session.currentSpeedMPS)) m/s")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        Text("\(Int(session.routeProgress * 100))%")
+                            .font(.caption.monospacedDigit().weight(.bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.primary.opacity(0.08)))
+                            .foregroundStyle(.secondary)
                     }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(routeMethod == .points ? .black : .primary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(
-                        Capsule().fill(routeMethod == .points ? LocusTheme.accent : Color.primary.opacity(0.08))
-                    )
-                }
-                .buttonStyle(.plain)
 
-                Button {
-                    withAnimation { routeMethod = .freehand }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "pencil.tip.crop.circle")
-                        Text("Freehand")
+                    ProgressView(value: session.routeProgress)
+                        .tint(session.isRoutePaused ? .orange : LocusTheme.accent)
+
+                    HStack(spacing: 8) {
+                        // Pause / Resume Toggle Button
+                        Button {
+                            withAnimation {
+                                session.togglePauseRoute()
+                            }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: session.isRoutePaused ? "play.fill" : "pause.fill")
+                                Text(session.isRoutePaused ? "Resume" : "Pause")
+                                    .font(.subheadline.weight(.bold))
+                            }
+                            .foregroundStyle(session.isRoutePaused ? .black : .white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(session.isRoutePaused ? LocusTheme.statusGood : Color.orange))
+                        }
+                        .buttonStyle(.plain)
+
+                        // Stop Button
+                        Button {
+                            withAnimation {
+                                session.stopRoute()
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "stop.fill")
+                                Text("Stop")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(LocusTheme.danger))
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+
+                        Button {
+                            showRouteSheet = true
+                        } label: {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.body.weight(.semibold))
+                                .frame(width: 36, height: 36)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(LocusTheme.accent)
                     }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(routeMethod == .freehand ? .black : .primary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(
-                        Capsule().fill(routeMethod == .freehand ? LocusTheme.accentSecondary : Color.primary.opacity(0.08))
-                    )
                 }
-                .buttonStyle(.plain)
-
-                Button {
-                    withAnimation {
-                        routeModeActive = false
-                    }
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(.plain)
-            }
-
-            // Quick Info & Action Row
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    if routeMethod == .points {
-                        Text(waypoints.isEmpty ? "Tap map to add points" : "\(waypoints.count) Points • \(RouteBuilder.formattedDistance(RouteBuilder.totalDistance(of: displayRouteCoordinates)))")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.primary)
-                    } else {
-                        Text(freehandCoordinates.isEmpty ? "Drag finger on map to draw" : "Drawn Path • \(RouteBuilder.formattedDistance(RouteBuilder.totalDistance(of: displayRouteCoordinates)))")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.primary)
-                    }
-                }
-
-                Spacer()
-
-                if routeMethod == .points && !waypoints.isEmpty {
+            } else {
+                // Method Switcher: Points vs Freehand
+                HStack(spacing: 8) {
                     Button {
-                        waypoints.removeLast()
-                        if waypoints.count >= 2 {
-                            buildPointsRoute()
-                        } else {
-                            calculatedRoute.removeAll()
+                        withAnimation { routeMethod = .points }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "mappin.and.ellipse")
+                            Text("Points")
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(routeMethod == .points ? .black : .primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule().fill(routeMethod == .points ? LocusTheme.accent : Color.primary.opacity(0.08))
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        withAnimation { routeMethod = .freehand }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "pencil.tip.crop.circle")
+                            Text("Freehand")
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(routeMethod == .freehand ? .black : .primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule().fill(routeMethod == .freehand ? LocusTheme.accentSecondary : Color.primary.opacity(0.08))
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        withAnimation {
+                            routeModeActive = false
                         }
                     } label: {
-                        Image(systemName: "arrow.uturn.backward.circle.fill")
-                            .font(.body)
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, height: 36)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
                 }
 
-                if routeMethod == .freehand && !freehandCoordinates.isEmpty {
-                    Button {
-                        clearAllRouteData()
-                    } label: {
-                        Image(systemName: "trash.circle.fill")
-                            .font(.body)
+                // Quick Info & Action Row with ETA
+                HStack(spacing: 8) {
+                    let totalDist = RouteBuilder.totalDistance(of: displayRouteCoordinates)
+                    let estDuration = RouteBuilder.estimatedDuration(distance: totalDist, speed: session.currentSpeedMPS)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        if routeMethod == .points {
+                            Text(waypoints.isEmpty ? "Tap map to add points" : "\(waypoints.count) Points • \(RouteBuilder.formattedDistance(totalDist))")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.primary)
+                        } else {
+                            Text(freehandCoordinates.isEmpty ? "Drag finger on map to draw" : "Drawn Path • \(RouteBuilder.formattedDistance(totalDist))")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.primary)
+                        }
+
+                        if displayRouteCoordinates.count >= 2 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "clock.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(LocusTheme.accent)
+                                Text("ETA: \(RouteBuilder.formattedETA(estDuration))")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(LocusTheme.accent)
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                }
 
-                Button {
-                    showRouteSheet = true
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.body.weight(.semibold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(LocusTheme.accent)
+                    Spacer()
 
-                if displayRouteCoordinates.count >= 2 {
+                    if routeMethod == .points && !waypoints.isEmpty {
+                        Button {
+                            waypoints.removeLast()
+                            if waypoints.count >= 2 {
+                                buildPointsRoute()
+                            } else {
+                                calculatedRoute.removeAll()
+                            }
+                        } label: {
+                            Image(systemName: "arrow.uturn.backward.circle.fill")
+                                .font(.body)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    if routeMethod == .freehand && !freehandCoordinates.isEmpty {
+                        Button {
+                            clearAllRouteData()
+                        } label: {
+                            Image(systemName: "trash.circle.fill")
+                                .font(.body)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+
                     Button {
-                        mapSaveRouteName = SavedRoute.suggestedName(
-                            waypoints: waypoints,
-                            method: routeMethod,
-                            distance: RouteBuilder.totalDistance(of: displayRouteCoordinates)
-                        )
-                        showMapSaveRouteAlert = true
+                        showRouteSheet = true
                     } label: {
-                        Image(systemName: "bookmark")
+                        Image(systemName: "slider.horizontal.3")
                             .font(.body.weight(.semibold))
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(LocusTheme.accent)
-                    .accessibilityLabel("Save Route")
 
-                    Button {
-                        if session.isFollowingRoute {
-                            session.stopRoute()
-                        } else {
+                    if displayRouteCoordinates.count >= 2 {
+                        Button {
+                            mapSaveRouteName = SavedRoute.suggestedName(
+                                waypoints: waypoints,
+                                method: routeMethod,
+                                distance: totalDist
+                            )
+                            showMapSaveRouteAlert = true
+                        } label: {
+                            Image(systemName: "bookmark")
+                                .font(.body.weight(.semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(LocusTheme.accent)
+                        .accessibilityLabel("Save Route")
+
+                        Button {
                             playRoute()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "play.fill")
+                                Text("Follow")
+                                    .font(.caption.weight(.bold))
+                            }
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(LocusTheme.statusGood))
                         }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: session.isFollowingRoute ? "stop.fill" : "play.fill")
-                            Text(session.isFollowingRoute ? "Stop" : "Follow")
-                                .font(.caption.weight(.bold))
-                        }
-                        .foregroundStyle(session.isFollowingRoute ? .white : .black)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(session.isFollowingRoute ? LocusTheme.danger : LocusTheme.statusGood))
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }

@@ -271,6 +271,16 @@ enum RouteBuilder {
             return "\(secs)s"
         }
     }
+
+    static func formattedETA(_ seconds: TimeInterval) -> String {
+        guard seconds > 1 else { return "< 1m" }
+        let durationStr = formattedDuration(seconds)
+        let arrivalDate = Date().addingTimeInterval(seconds)
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        let timeStr = formatter.string(from: arrivalDate)
+        return "\(durationStr) (\(timeStr))"
+    }
 }
 
 // MARK: - GPX data model

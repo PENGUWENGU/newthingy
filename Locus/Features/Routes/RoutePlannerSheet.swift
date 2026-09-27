@@ -263,12 +263,12 @@ struct RoutePlannerSheet: View {
                             }
                             Spacer()
                             VStack(alignment: .trailing, spacing: 4) {
-                                Text("Est. Duration (\(String(format: "%.1f", session.currentSpeedMPS)) m/s)")
+                                Text(session.isFollowingRoute ? "Remaining ETA" : "Est. Duration (\(String(format: "%.1f", session.currentSpeedMPS)) m/s)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                Text(RouteBuilder.formattedDuration(estimatedDuration))
+                                Text(session.isFollowingRoute ? RouteBuilder.formattedETA(session.remainingRouteDuration) : RouteBuilder.formattedETA(estimatedDuration))
                                     .font(.title3.weight(.bold))
-                                    .foregroundStyle(LocusTheme.accent)
+                                    .foregroundStyle(session.isRoutePaused ? .orange : LocusTheme.accent)
                             }
                         }
                         .padding(.vertical, 4)
@@ -308,22 +308,60 @@ struct RoutePlannerSheet: View {
                         }
 
                         if session.isFollowingRoute {
-                            VStack(spacing: 8) {
-                                ProgressView(value: session.routeProgress)
-                                    .tint(LocusTheme.accent)
-                                Button {
-                                    onStopRoute()
-                                } label: {
-                                    HStack {
-                                        Spacer()
-                                        Label("Stop Following Route", systemImage: "stop.fill")
-                                            .font(.headline)
-                                        Spacer()
-                                    }
-                                    .padding(.vertical, 4)
+                            VStack(spacing: 10) {
+                                HStack {
+                                    Label(
+                                        session.isRoutePaused ? "Path Paused" : "Following Path",
+                                        systemImage: session.isRoutePaused ? "pause.circle.fill" : "figure.walk.motion"
+                                    )
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(session.isRoutePaused ? .orange : LocusTheme.statusGood)
+
+                                    Spacer()
+
+                                    Text("\(Int(session.routeProgress * 100))%")
+                                        .font(.caption.monospacedDigit().weight(.bold))
+                                        .foregroundStyle(.secondary)
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(LocusTheme.danger)
+
+                                ProgressView(value: session.routeProgress)
+                                    .tint(session.isRoutePaused ? .orange : LocusTheme.accent)
+
+                                HStack(spacing: 10) {
+                                    Button {
+                                        withAnimation {
+                                            session.togglePauseRoute()
+                                        }
+                                    } label: {
+                                        HStack {
+                                            Spacer()
+                                            Label(
+                                                session.isRoutePaused ? "Resume Path" : "Pause Path",
+                                                systemImage: session.isRoutePaused ? "play.fill" : "pause.fill"
+                                            )
+                                            .font(.headline)
+                                            Spacer()
+                                        }
+                                        .padding(.vertical, 4)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(session.isRoutePaused ? LocusTheme.statusGood : .orange)
+                                    .foregroundStyle(session.isRoutePaused ? .black : .white)
+
+                                    Button {
+                                        onStopRoute()
+                                    } label: {
+                                        HStack {
+                                            Spacer()
+                                            Label("Stop", systemImage: "stop.fill")
+                                                .font(.headline)
+                                            Spacer()
+                                        }
+                                        .padding(.vertical, 4)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .tint(LocusTheme.danger)
+                                }
                             }
                         } else {
                             Button {
