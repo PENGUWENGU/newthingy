@@ -74,47 +74,7 @@ struct MapHomeView: View {
                         // Single dropped pin (when not in route mode or when placing pins)
                         if let pin = session.pin, !routeModeActive {
                             Annotation("", coordinate: pin, anchor: .bottom) {
-                                MapDropPin(
-                                    selected: pinSelected,
-                                    isDragging: isDraggingPin,
-                                    onSelect: {
-                                        searchFocused = false
-                                        suppressNextMapTap = true
-                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
-                                            pinSelected.toggle()
-                                        }
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                            suppressNextMapTap = false
-                                        }
-                                    },
-                                    onRemove: {
-                                        suppressNextMapTap = true
-                                        withAnimation {
-                                            session.pin = nil
-                                            pinSelected = false
-                                        }
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                            suppressNextMapTap = false
-                                        }
-                                    },
-                                    onDragBegan: {
-                                        searchFocused = false
-                                        suppressNextMapTap = true
-                                        pinSelected = false
-                                        isDraggingPin = true
-                                    },
-                                    onDragMoved: { globalPoint in
-                                        if let coord = proxy.convert(globalPoint, from: .global) {
-                                            session.pin = coord
-                                        }
-                                    },
-                                    onDragEnded: {
-                                        isDraggingPin = false
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                            suppressNextMapTap = false
-                                        }
-                                    }
-                                )
+                                dropPinView(proxy: proxy)
                             }
                         }
 
@@ -122,21 +82,7 @@ struct MapHomeView: View {
                         if routeModeActive && routeMethod == .points {
                             ForEach(Array(waypoints.enumerated()), id: \.element.id) { index, wp in
                                 Annotation("", coordinate: wp.coordinate, anchor: .center) {
-                                    WaypointPinView(
-                                        index: index,
-                                        total: waypoints.count,
-                                        stopDuration: wp.stopDuration,
-                                        isSelected: selectedWaypointId == wp.id,
-                                        onSelect: {
-                                            selectedWaypointId = (selectedWaypointId == wp.id) ? nil : wp.id
-                                        },
-                                        onRemove: {
-                                            removeWaypoint(at: index)
-                                        },
-                                        onToggleStop: {
-                                            editingStopWaypointIndex = index
-                                        }
-                                    )
+                                    waypointPinView(index: index, wp: wp)
                                 }
                             }
                         }
@@ -144,20 +90,7 @@ struct MapHomeView: View {
                         // Simulated Spoof Puck with active motion beacon
                         if let sim = session.simulated {
                             Annotation("Spoof", coordinate: sim) {
-                                ZStack {
-                                    if session.isFollowingRoute {
-                                        Circle()
-                                            .stroke((session.isRoutePaused ? Color.orange : LocusTheme.accent).opacity(0.6), lineWidth: 2)
-                                            .frame(width: 44, height: 44)
-                                            .scaleEffect(session.isRoutePaused ? 1.0 : (puckPulsing ? 1.35 : 0.85))
-                                            .opacity(session.isRoutePaused ? 0.6 : (puckPulsing ? 0.0 : 0.85))
-                                    }
-                                    Circle().fill((session.isRoutePaused ? Color.orange : LocusTheme.accent).opacity(0.25))
-                                        .frame(width: 38, height: 38)
-                                    Circle().fill(session.isRoutePaused ? Color.orange : LocusTheme.accent)
-                                        .frame(width: 14, height: 14)
-                                        .overlay(Circle().stroke(.white, lineWidth: 2))
-                                }
+                                spoofPuckView
                             }
                         }
 
@@ -942,6 +875,85 @@ struct MapHomeView: View {
         .foregroundStyle(.primary)
         .contentShape(Circle())
         .accessibilityLabel("Current location")
+    }
+
+    private func dropPinView(proxy: MapProxy) -> some View {
+        MapDropPin(
+            selected: pinSelected,
+            isDragging: isDraggingPin,
+            onSelect: {
+                searchFocused = false
+                suppressNextMapTap = true
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
+                    pinSelected.toggle()
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    suppressNextMapTap = false
+                }
+            },
+            onRemove: {
+                suppressNextMapTap = true
+                withAnimation {
+                    session.pin = nil
+                    pinSelected = false
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    suppressNextMapTap = false
+                }
+            },
+            onDragBegan: {
+                searchFocused = false
+                suppressNextMapTap = true
+                pinSelected = false
+                isDraggingPin = true
+            },
+            onDragMoved: { globalPoint in
+                if let coord = proxy.convert(globalPoint, from: .global) {
+                    session.pin = coord
+                }
+            },
+            onDragEnded: {
+                isDraggingPin = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    suppressNextMapTap = false
+                }
+            }
+        )
+    }
+
+    private func waypointPinView(index: Int, wp: RouteWaypoint) -> some View {
+        WaypointPinView(
+            index: index,
+            total: waypoints.count,
+            stopDuration: wp.stopDuration,
+            isSelected: selectedWaypointId == wp.id,
+            onSelect: {
+                selectedWaypointId = (selectedWaypointId == wp.id) ? nil : wp.id
+            },
+            onRemove: {
+                removeWaypoint(at: index)
+            },
+            onToggleStop: {
+                editingStopWaypointIndex = index
+            }
+        )
+    }
+
+    private var spoofPuckView: some View {
+        ZStack {
+            if session.isFollowingRoute {
+                Circle()
+                    .stroke((session.isRoutePaused ? Color.orange : LocusTheme.accent).opacity(0.6), lineWidth: 2)
+                    .frame(width: 44, height: 44)
+                    .scaleEffect(session.isRoutePaused ? 1.0 : (puckPulsing ? 1.35 : 0.85))
+                    .opacity(session.isRoutePaused ? 0.6 : (puckPulsing ? 0.0 : 0.85))
+            }
+            Circle().fill((session.isRoutePaused ? Color.orange : LocusTheme.accent).opacity(0.25))
+                .frame(width: 38, height: 38)
+            Circle().fill(session.isRoutePaused ? Color.orange : LocusTheme.accent)
+                .frame(width: 14, height: 14)
+                .overlay(Circle().stroke(.white, lineWidth: 2))
+        }
     }
 
     private func goToCurrentLocation() {

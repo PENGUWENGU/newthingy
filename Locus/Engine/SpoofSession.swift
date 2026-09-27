@@ -100,10 +100,6 @@ final class SpoofSession: ObservableObject {
         RouteConnectionPreference.defaultType = type
     }
 
-    func skipStop() {
-        skipCurrentStopRequested = true
-    }
-
     func setAccentTheme(_ theme: AccentColorTheme) {
         accentTheme = theme
         ThemePreference.accent = theme

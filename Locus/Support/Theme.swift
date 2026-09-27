@@ -169,6 +169,16 @@ enum ThemePreference {
         set { UserDefaults.standard.set(newValue, forKey: customGlassTintHexKey) }
     }
 
+    static var glassTintHex: String {
+        get { customGlassTintHex }
+        set { customGlassTintHex = newValue }
+    }
+
+    static var hasCustomGlassTint: Bool {
+        get { isGlassTintEnabled }
+        set { isGlassTintEnabled = newValue }
+    }
+
     static var glassTintColor: Color? {
         guard isGlassTintEnabled else { return nil }
         return Color(hex: customGlassTintHex)
@@ -179,10 +189,15 @@ enum ThemePreference {
         set { UserDefaults.standard.set(newValue, forKey: customCompletionFlashHexKey) }
     }
 
+    static var completionFlashHex: String {
+        get { customCompletionFlashHex }
+        set { customCompletionFlashHex = newValue }
+    }
+
     static var completionFlashColor: Color {
         let hex = customCompletionFlashHex.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !hex.isEmpty {
-            return Color(hex: hex)
+        if !hex.isEmpty, let color = Color(hex: hex) {
+            return color
         }
         return LocusTheme.accent
     }
