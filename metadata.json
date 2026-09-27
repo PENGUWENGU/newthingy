@@ -1,0 +1,8 @@
+{
+  "name": "Locus - GPS & Route Simulator",
+  "description": "Web version of Locus: One-tap teleport, live joystick controller, route generation & GPX playback, developer GPS injector simulation, favorites and altitude tuning.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
