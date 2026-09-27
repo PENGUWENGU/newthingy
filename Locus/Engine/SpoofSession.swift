@@ -50,6 +50,7 @@ final class SpoofSession: ObservableObject {
 
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
+    @Published var savedRoutes: [SavedRoute] = []
 
     private var resendTimer: Timer?
     private var healthTimer: Timer?
@@ -61,10 +62,12 @@ final class SpoofSession: ObservableObject {
 
     private let favoritesKey = "locus.favorites"
     private let recentsKey = "locus.recents"
+    private let savedRoutesKey = "locus.saved_routes"
 
     init() {
         favorites = SavedPlace.load(key: favoritesKey)
         recents = SavedPlace.load(key: recentsKey)
+        savedRoutes = SavedRoute.load(key: savedRoutesKey)
         customSpeedMPS = SpeedPreference.storedValue
     }
 
@@ -273,6 +276,35 @@ final class SpoofSession: ObservableObject {
     func removeRecent(_ place: SavedPlace) {
         recents.removeAll { $0.id == place.id }
         SavedPlace.save(recents, key: recentsKey)
+    }
+
+    // MARK: - Saved Routes Management
+
+    func saveRoute(_ route: SavedRoute) {
+        if let index = savedRoutes.firstIndex(where: { $0.id == route.id }) {
+            savedRoutes[index] = route
+        } else {
+            savedRoutes.insert(route, at: 0)
+        }
+        SavedRoute.save(savedRoutes, key: savedRoutesKey)
+    }
+
+    func deleteRoute(id: UUID) {
+        savedRoutes.removeAll { $0.id == id }
+        SavedRoute.save(savedRoutes, key: savedRoutesKey)
+    }
+
+    func deleteRoute(at offsets: IndexSet) {
+        savedRoutes.remove(atOffsets: offsets)
+        SavedRoute.save(savedRoutes, key: savedRoutesKey)
+    }
+
+    func renameRoute(id: UUID, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = savedRoutes.firstIndex(where: { $0.id == id }) else { return }
+        savedRoutes[index].name = trimmed
+        SavedRoute.save(savedRoutes, key: savedRoutesKey)
     }
 
     /// Best display name for starring the current pin (search title, matching recent, etc.).

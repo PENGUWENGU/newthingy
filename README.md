@@ -16,6 +16,7 @@ Free and open-source iPhone location teleport. Tap the map, search a place, or d
 - Walk/Drive routing with 2 creation methods:
   - **Points**: Tap sequential waypoints on map with road snapping or direct segments, waypoint management, loop, and reverse
   - **Freehand**: Smooth finger-drag gesture sketching directly on the map in real-time
+- **Saved Routes**: Store, manage, rename, and 1-tap playback any frequent Points, Freehand, or GPX routes with distance & est. duration
 - GPX track import & export with high-precision timestamps and elevations
 - Background keep-alive + live status bar + drop alerts
 - Favorites & recents

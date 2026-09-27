@@ -69,6 +69,7 @@ targets:
       - path: LocusTests
       - path: Locus/Engine/RouteBuilder.swift
       - path: Locus/Engine/TravelMode.swift
+      - path: Locus/Support/SavedRoute.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chrismack.locus.tests

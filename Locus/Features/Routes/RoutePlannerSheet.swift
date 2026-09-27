@@ -19,11 +19,21 @@ struct RoutePlannerSheet: View {
     var onClearRoute: () -> Void
     var onAddPinAsWaypoint: () -> Void
     var onAddSpoofAsWaypoint: () -> Void
+    var onLoadRoute: (SavedRoute) -> Void
 
     @EnvironmentObject private var session: SpoofSession
     @Environment(\.dismiss) private var dismiss
+
     @State private var editingWaypoint: RouteWaypoint?
     @State private var editNameText = ""
+
+    // Saved Routes UI State
+    @State private var showSaveAlert = false
+    @State private var saveRouteNameText = ""
+    @State private var showSaveSuccessBanner = false
+    @State private var routeToRename: SavedRoute?
+    @State private var renameText = ""
+    @State private var showRenameAlert = false
 
     private var activePath: [CLLocationCoordinate2D] {
         if !calculatedRoute.isEmpty {
@@ -100,32 +110,26 @@ struct RoutePlannerSheet: View {
                             }
                         }
                     } header: {
-                        Text("Add Waypoints")
+                        Text("Waypoints (\(waypoints.count))")
                     } footer: {
-                        Text("You can also tap anywhere on the map in Points mode to add waypoints.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                        Text("Tap anywhere on the map to add sequential waypoints. Drag rows to reorder.")
                     }
 
-                    Section("Waypoints (\(waypoints.count))") {
-                        if waypoints.isEmpty {
-                            Text("No waypoints added yet. Tap on the map or use the buttons above.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        } else {
+                    if !waypoints.isEmpty {
+                        Section {
                             ForEach(Array(waypoints.enumerated()), id: \.element.id) { index, wp in
-                                HStack(spacing: 10) {
+                                HStack(spacing: 12) {
                                     Circle()
                                         .fill(badgeColor(for: index, total: waypoints.count))
                                         .frame(width: 24, height: 24)
-                                        .overlay(
+                                        .overlay {
                                             Text("\(index + 1)")
-                                                .font(.system(size: 11, weight: .bold))
+                                                .font(.caption2.weight(.bold))
                                                 .foregroundStyle(.black)
-                                        )
+                                        }
 
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(wp.name.isEmpty ? (index == 0 ? "Start Point" : (index == waypoints.count - 1 ? "End Point" : "Waypoint \(index + 1)")) : wp.name)
+                                        Text(wp.name.isEmpty ? "Waypoint \(index + 1)" : wp.name)
                                             .font(.subheadline.weight(.medium))
                                         Text(String(format: "%.5f, %.5f", wp.coordinate.latitude, wp.coordinate.longitude))
                                             .font(.caption2.monospaced())
@@ -179,11 +183,13 @@ struct RoutePlannerSheet: View {
                                 Spacer()
                                 if isRouting {
                                     ProgressView()
-                                        .tint(.white)
+                                        .padding(.trailing, 6)
+                                    Text("Calculating Route…")
+                                        .font(.headline)
                                 } else {
                                     Label(
-                                        connectionType == .road ? "Calculate Road Route" : "Build Straight Route",
-                                        systemImage: connectionType == .road ? "road.lanes" : "line.diagonal"
+                                        connectionType == .road ? "Recalculate Roads Route" : "Update Direct Path",
+                                        systemImage: connectionType == .road ? "arrow.triangle.turn.up.right.diamond.fill" : "line.diagonal"
                                     )
                                     .font(.headline)
                                 }
@@ -191,33 +197,21 @@ struct RoutePlannerSheet: View {
                             }
                             .padding(.vertical, 4)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(LocusTheme.accent)
-                        .foregroundStyle(.black)
                         .disabled(waypoints.count < 2 || isRouting)
                     }
                 }
 
                 // MARK: - Method 2: Freehand
                 if method == .freehand {
-                    Section("Freehand Drawing") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "hand.draw.fill")
-                                    .font(.title2)
-                                    .foregroundStyle(LocusTheme.accentSecondary)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Continuous Touch Sketch")
-                                        .font(.subheadline.weight(.semibold))
-                                    Text("Drag your finger across the map to sketch freeform trajectories.")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(.vertical, 4)
+                    Section("Freehand Sketch Controls") {
+                        Text("Drag your finger across the map to draw your path freely. Locus smooths and samples coordinates to create a seamless GPS track.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
 
-                            HStack(spacing: 16) {
-                                LabeledContent("Raw points", value: "\(freehandCoordinates.count)")
+                        if !freehandCoordinates.isEmpty {
+                            HStack {
+                                LabeledContent("Raw Points", value: "\(freehandCoordinates.count)")
+                                Spacer()
                                 LabeledContent("Smoothed", value: "\(calculatedRoute.isEmpty ? freehandCoordinates.count : calculatedRoute.count)")
                             }
                             .font(.caption)
@@ -256,7 +250,7 @@ struct RoutePlannerSheet: View {
                     }
                 }
 
-                // MARK: - Route Summary & Follow
+                // MARK: - Route Overview & Follow / Save
                 if activePath.count >= 2 {
                     Section("Route Overview") {
                         HStack {
@@ -282,6 +276,35 @@ struct RoutePlannerSheet: View {
                         Toggle(isOn: $loopRoute) {
                             Label("Repeat route continuously (Loop)", systemImage: "repeat")
                                 .font(.subheadline)
+                        }
+
+                        // Save Route Button
+                        HStack(spacing: 10) {
+                            Button {
+                                saveRouteNameText = SavedRoute.suggestedName(
+                                    waypoints: waypoints,
+                                    method: method,
+                                    distance: totalDistance
+                                )
+                                showSaveAlert = true
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    Label("Save Route", systemImage: "bookmark.fill")
+                                        .font(.subheadline.weight(.semibold))
+                                    Spacer()
+                                }
+                                .padding(.vertical, 4)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(LocusTheme.accent)
+
+                            if showSaveSuccessBanner {
+                                Label("Saved!", systemImage: "checkmark.circle.fill")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(LocusTheme.statusGood)
+                                    .transition(.scale.combined(with: .opacity))
+                            }
                         }
 
                         if session.isFollowingRoute {
@@ -322,13 +345,150 @@ struct RoutePlannerSheet: View {
                     }
                 }
 
+                // MARK: - Saved Routes Section
+                Section {
+                    if session.savedRoutes.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label("No Saved Routes", systemImage: "bookmark")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text("Create a points or freehand route above, then tap 'Save Route' to store your frequent walking and driving routes.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                    } else {
+                        ForEach(session.savedRoutes) { route in
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(alignment: .top) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(route.name)
+                                            .font(.headline)
+                                            .foregroundStyle(.primary)
+
+                                        Text("\(route.formattedDistance) • \(route.formattedDate)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    HStack(spacing: 4) {
+                                        Text(route.method.rawValue)
+                                            .font(.caption2.weight(.bold))
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 3)
+                                            .background(
+                                                Capsule().fill(route.method == .points ? LocusTheme.accent.opacity(0.18) : LocusTheme.accentSecondary.opacity(0.18))
+                                            )
+                                            .foregroundStyle(route.method == .points ? LocusTheme.accent : LocusTheme.accentSecondary)
+
+                                        if route.isLoop {
+                                            Image(systemName: "repeat")
+                                                .font(.caption2.weight(.bold))
+                                                .padding(4)
+                                                .background(Circle().fill(Color.secondary.opacity(0.15)))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+
+                                HStack(spacing: 10) {
+                                    Button {
+                                        onLoadRoute(route)
+                                    } label: {
+                                        Label("Load", systemImage: "arrow.down.circle")
+                                            .font(.footnote.weight(.semibold))
+                                    }
+                                    .buttonStyle(.bordered)
+
+                                    Button {
+                                        onLoadRoute(route)
+                                        onPlayRoute()
+                                        dismiss()
+                                    } label: {
+                                        Label("Follow", systemImage: "play.fill")
+                                            .font(.footnote.weight(.semibold))
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(LocusTheme.statusGood)
+                                    .foregroundStyle(.black)
+
+                                    Spacer()
+
+                                    Menu {
+                                        Button {
+                                            routeToRename = route
+                                            renameText = route.name
+                                            showRenameAlert = true
+                                        } label: {
+                                            Label("Rename", systemImage: "pencil")
+                                        }
+
+                                        Button {
+                                            exportSavedRouteGPX(route)
+                                        } label: {
+                                            Label("Export GPX", systemImage: "square.and.arrow.up")
+                                        }
+
+                                        Button(role: .destructive) {
+                                            withAnimation {
+                                                session.deleteRoute(id: route.id)
+                                            }
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    } label: {
+                                        Image(systemName: "ellipsis.circle")
+                                            .font(.body)
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 32, height: 32)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    withAnimation {
+                                        session.deleteRoute(id: route.id)
+                                    }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+
+                                Button {
+                                    routeToRename = route
+                                    renameText = route.name
+                                    showRenameAlert = true
+                                } label: {
+                                    Label("Rename", systemImage: "pencil")
+                                }
+                                .tint(.orange)
+                            }
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Saved Routes")
+                        Spacer()
+                        if !session.savedRoutes.isEmpty {
+                            Text("\(session.savedRoutes.count)")
+                                .font(.caption.weight(.bold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(Capsule().fill(LocusTheme.accent.opacity(0.2)))
+                                .foregroundStyle(LocusTheme.accent)
+                        }
+                    }
+                }
+
                 // MARK: - GPX Exchange
                 Section("GPX Exchange") {
                     Button(action: onImportGPX) {
                         Label("Import GPX Track", systemImage: "square.and.arrow.down")
                     }
                     Button(action: onExportGPX) {
-                        Label("Export GPX Track", systemImage: "square.and.arrow.up")
+                        Label("Export Current GPX Track", systemImage: "square.and.arrow.up")
                     }
                     .disabled(activePath.isEmpty)
                 }
@@ -345,6 +505,63 @@ struct RoutePlannerSheet: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .alert("Save Route", isPresented: $showSaveAlert) {
+                TextField("Route Name", text: $saveRouteNameText)
+                Button("Save") {
+                    saveCurrentRoute()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Enter a name to save this route to your device.")
+            }
+            .alert("Rename Route", isPresented: $showRenameAlert) {
+                TextField("New Name", text: $renameText)
+                Button("Save") {
+                    if let target = routeToRename {
+                        session.renameRoute(id: target.id, to: renameText)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Enter a new name for this saved route.")
+            }
+        }
+    }
+
+    private func saveCurrentRoute() {
+        let route = SavedRoute(
+            name: saveRouteNameText,
+            method: method,
+            connectionType: connectionType,
+            waypoints: waypoints,
+            coordinates: activePath,
+            distanceMeters: totalDistance,
+            isLoop: loopRoute
+        )
+        session.saveRoute(route)
+        withAnimation {
+            showSaveSuccessBanner = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            withAnimation {
+                showSaveSuccessBanner = false
+            }
+        }
+    }
+
+    private func exportSavedRouteGPX(_ route: SavedRoute) {
+        let gpx = GPXCodec.export(route.clCoordinates)
+        let safeName = route.name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safeName).gpx")
+        do {
+            try gpx.data(using: .utf8)?.write(to: url)
+            let av = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+            if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+               let root = scene.keyWindow?.rootViewController {
+                root.present(av, animated: true)
+            }
+        } catch {
+            session.lastError = error.localizedDescription
         }
     }
 

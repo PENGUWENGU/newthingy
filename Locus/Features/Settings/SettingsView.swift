@@ -97,7 +97,7 @@ struct SettingsView: View {
                 }
 
                 Section("Privacy") {
-                    Text("Fully on-device. Favorites and recents stay in UserDefaults. No analytics, no accounts, nothing uploaded.")
+                    Text("Fully on-device. Favorites, recents, and saved routes stay in UserDefaults on your device. No analytics, no accounts, nothing uploaded.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

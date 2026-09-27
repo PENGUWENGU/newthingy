@@ -25,6 +25,8 @@ struct MapHomeView: View {
     @State private var showGPXImporter = false
     @State private var isFreehandDragging = false
     @State private var importedGPXTrack: GPXTrack?
+    @State private var showMapSaveRouteAlert = false
+    @State private var mapSaveRouteName = ""
 
     // Standard Pin State
     @State private var pinSelected = false
@@ -220,9 +222,19 @@ struct MapHomeView: View {
                 onSmoothFreehand: smoothFreehandRoute,
                 onClearRoute: clearAllRouteData,
                 onAddPinAsWaypoint: addPinAsWaypoint,
-                onAddSpoofAsWaypoint: addSpoofAsWaypoint
+                onAddSpoofAsWaypoint: addSpoofAsWaypoint,
+                onLoadRoute: loadSavedRoute
             )
             .presentationDetents([.medium, .large])
+        }
+        .alert("Save Route", isPresented: $showMapSaveRouteAlert) {
+            TextField("Route Name", text: $mapSaveRouteName)
+            Button("Save") {
+                saveCurrentRouteFromMap()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Enter a name to save this route to your device.")
         }
     }
 
@@ -355,6 +367,55 @@ struct MapHomeView: View {
             return
         }
         session.followRoute(path, pairing: pairing, loop: loopRoute)
+    }
+
+    private func saveCurrentRouteFromMap() {
+        let path = displayRouteCoordinates
+        guard path.count >= 2 else { return }
+        let dist = RouteBuilder.totalDistance(of: path)
+        let route = SavedRoute(
+            name: mapSaveRouteName,
+            method: routeMethod,
+            connectionType: routeConnectionType,
+            waypoints: waypoints,
+            coordinates: path,
+            distanceMeters: dist,
+            isLoop: loopRoute
+        )
+        session.saveRoute(route)
+    }
+
+    private func loadSavedRoute(_ savedRoute: SavedRoute) {
+        routeModeActive = true
+        routeMethod = savedRoute.method
+        routeConnectionType = savedRoute.connectionType
+        loopRoute = savedRoute.isLoop
+        waypoints = savedRoute.clWaypoints
+
+        if savedRoute.method == .points {
+            freehandCoordinates = []
+            if savedRoute.connectionType == .straight {
+                calculatedRoute = RouteBuilder.multiPointStraightRoute(waypoints: savedRoute.clCoordinates)
+            } else {
+                calculatedRoute = savedRoute.clCoordinates
+            }
+        } else {
+            waypoints = []
+            freehandCoordinates = savedRoute.clCoordinates
+            calculatedRoute = savedRoute.clCoordinates
+        }
+
+        importedGPXTrack = nil
+
+        if let first = savedRoute.clCoordinates.first ?? savedRoute.clWaypoints.first?.coordinate {
+            session.pin = first
+        }
+
+        if let region = MKCoordinateRegion.framing(savedRoute.clCoordinates) {
+            withAnimation(.easeInOut(duration: 0.35)) {
+                position = .region(region)
+            }
+        }
     }
 
     // MARK: - UI Components
@@ -491,6 +552,21 @@ struct MapHomeView: View {
                 .foregroundStyle(LocusTheme.accent)
 
                 if displayRouteCoordinates.count >= 2 {
+                    Button {
+                        mapSaveRouteName = SavedRoute.suggestedName(
+                            waypoints: waypoints,
+                            method: routeMethod,
+                            distance: RouteBuilder.totalDistance(of: displayRouteCoordinates)
+                        )
+                        showMapSaveRouteAlert = true
+                    } label: {
+                        Image(systemName: "bookmark")
+                            .font(.body.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(LocusTheme.accent)
+                    .accessibilityLabel("Save Route")
+
                     Button {
                         if session.isFollowingRoute {
                             session.stopRoute()
