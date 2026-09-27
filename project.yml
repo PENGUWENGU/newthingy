@@ -16,6 +16,7 @@ settings:
     SWIFT_VERSION: "5.0"
     TARGETED_DEVICE_FAMILY: "1,2"
     IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    SWIFT_COMPILATION_MODE: "wholemodule"
 targets:
   Locus:
     type: application
@@ -55,6 +56,7 @@ targets:
         ENABLE_BITCODE: NO
         SUPPORTS_MACCATALYST: NO
         SWIFT_OBJC_BRIDGING_HEADER: ""
+        SWIFT_COMPILATION_MODE: "wholemodule"
   # Pure-logic unit tests for the GPX codec and custom-speed validation. Deliberately has
   # no `dependencies:` on the Locus target: Locus links Vendor/idevice/libidevice_ffi.a,
   # which is a device-only (arm64) static library with no iOS Simulator slice, so a test
@@ -78,3 +80,4 @@ targets:
         IPHONEOS_DEPLOYMENT_TARGET: "18.0"
         ENABLE_BITCODE: NO
         SUPPORTS_MACCATALYST: NO
+        SWIFT_COMPILATION_MODE: "wholemodule"

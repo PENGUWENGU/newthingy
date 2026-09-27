@@ -66,185 +66,229 @@ struct MapHomeView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            MapReader { proxy in
-                ZStack {
-                    Map(position: $position) {
-                        UserAnnotation()
-
-                        if let pin = session.pin, !routeModeActive {
-                            Annotation("", coordinate: pin, anchor: .bottom) {
-                                dropPinView(proxy: proxy)
-                            }
-                        }
-
-                        waypointAnnotations
-
-                        if let sim = session.simulated {
-                            Annotation("Spoof", coordinate: sim) {
-                                spoofPuckView
-                            }
-                        }
-
-                        routePolylines
-                    }
-                    .mapStyle(mapStyle)
-                    .mapControlVisibility(.hidden)
-                    .onTapGesture { point in
-                        searchFocused = false
-                        guard !suppressNextMapTap, !isDraggingPin else { return }
-                        handleMapTap(at: point, proxy: proxy)
-                    }
-
-                    // Freehand Drawing Touch Overlay: allows 1-finger drawing while passing 2-finger pan/scroll to MKMapView
-                    if routeModeActive && routeMethod == .freehand && !session.isFollowingRoute {
-                        FreehandCanvasTouchOverlay(
-                            isDrawingEnabled: isFreehandDrawingMode,
-                            onPoint: { point in
-                                handleFreehandDrag(at: point, proxy: proxy)
-                            },
-                            onEnded: {
-                                handleFreehandDragEnd()
-                            }
-                        )
-                    }
-                }
-            }
-            .background(Color.black.ignoresSafeArea())
-
+            mapContainerView
             topChrome
-
-            if session.routeFinishedFlash {
-                ThemePreference.completionFlashColor
-                    .opacity(0.4)
-                    .ignoresSafeArea()
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
-            }
-
-            if showFavoriteAnimation {
-                VStack {
-                    Spacer()
-                    HStack(spacing: 8) {
-                        Image(systemName: "star.fill")
-                            .font(.body.weight(.black))
-                            .foregroundStyle(.yellow)
-                        Text("Saved to Favorites!")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(.primary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Capsule().fill(Color(UIColor.secondarySystemBackground)).shadow(color: LocusTheme.accent.opacity(0.4), radius: 12, y: 4))
-                    .transition(.scale.combined(with: .opacity))
-                    .padding(.bottom, 100)
-                }
-            }
+            completionFlashOverlay
+            favoriteCelebrationOverlay
         }
-        .onAppear {
-            session.startLocationUpdates()
-            routeConnectionType = session.defaultConnectionType
-            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
-                puckPulsing = true
-            }
-        }
-        .onChange(of: session.defaultConnectionType) { _, newDefault in
-            if waypoints.isEmpty {
-                routeConnectionType = newDefault
-            }
-        }
-        .onReceive(pathAnimationTimer) { _ in
-            if session.isFollowingRoute && !session.isRoutePaused {
-                pathDashPhase -= 1.6
-            }
-        }
+        .onAppear(perform: handleOnAppear)
+        .onChange(of: session.defaultConnectionType, handleDefaultConnectionTypeChange)
+        .onReceive(pathAnimationTimer, perform: handlePathAnimationTick)
         .onChange(of: session.pin?.latitude) { _, newValue in
             if newValue == nil { pinSelected = false }
         }
         .sheet(isPresented: $showRouteSheet) {
-            RoutePlannerSheet(
-                method: $routeMethod,
-                connectionType: $routeConnectionType,
-                waypoints: $waypoints,
-                freehandCoordinates: $freehandCoordinates,
-                calculatedRoute: $calculatedRoute,
-                isRouting: $isRouting,
-                loopRoute: $loopRoute,
-                onBuildRoute: buildPointsRoute,
-                onPlayRoute: playRoute,
-                onStopRoute: {
-                    showEndSpoofConfirmation = true
-                },
-                onImportGPX: {},
-                onExportGPX: {},
-                onSmoothFreehand: smoothFreehandRoute,
-                onClearRoute: clearAllRouteData,
-                onAddPinAsWaypoint: addPinAsWaypoint,
-                onAddSpoofAsWaypoint: addSpoofAsWaypoint,
-                onLoadRoute: loadSavedRoute
-            )
-            .presentationDetents([.medium, .large])
+            routePlannerSheetView
         }
         .sheet(isPresented: $showThemeSheet) {
             ThemeCustomizerSheet(session: session)
         }
-        .sheet(isPresented: Binding(
-            get: { editingStopWaypointIndex != nil },
-            set: { if !$0 { editingStopWaypointIndex = nil } }
-        )) {
-            if let idx = editingStopWaypointIndex, waypoints.indices.contains(idx) {
-                StopDurationPickerSheet(
-                    waypointIndex: idx,
-                    waypointName: waypoints[idx].name,
-                    initialDuration: waypoints[idx].stopDuration
-                ) { newDuration in
-                    waypoints[idx].stopDuration = newDuration
-                    if session.isFollowingRoute {
-                        session.updateActiveRoute(displayRouteCoordinates, waypoints: waypoints, loop: loopRoute)
-                    }
-                }
-            }
+        .sheet(isPresented: stopPickerBinding) {
+            stopPickerSheetView
         }
         .alert("Save Route", isPresented: $showMapSaveRouteAlert) {
-            TextField("Route Name", text: $mapSaveRouteName)
-            Button("Save") {
-                SoundManager.play(.success)
-                saveCurrentRouteFromMap()
-            }
-            Button("Cancel", role: .cancel) {}
+            saveRouteAlertView
         } message: {
             Text("Enter a name to save this route to your device.")
         }
         .alert("End Route Spoofing?", isPresented: $showEndSpoofConfirmation) {
-            Button("End Spoof", role: .destructive) {
-                SoundManager.play(.alert)
-                withAnimation {
-                    session.stopRoute()
-                }
-            }
-            Button("Continue Route", role: .cancel) {
-                SoundManager.play(.tap)
-            }
+            endSpoofAlertView
         } message: {
             Text("Are you sure you want to stop following this route and end simulated movement?")
         }
         .alert("Save Favorite Place", isPresented: $showFavoritePrompt) {
-            TextField("Place Name", text: $favoriteNameInput)
-            Button("Save") {
-                if let coord = pendingFavoriteCoordinate {
-                    let finalName = favoriteNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Favorite Place" : favoriteNameInput
-                    session.addFavorite(name: finalName, coordinate: coord)
-                    SoundManager.play(.success)
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
-                        showFavoriteAnimation = true
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        withAnimation { showFavoriteAnimation = false }
-                    }
-                }
-            }
-            Button("Cancel", role: .cancel) {}
+            favoritePromptAlertView
         } message: {
             Text("Enter a custom name for this favorite location.")
+        }
+    }
+
+    private var mapContainerView: some View {
+        MapReader { proxy in
+            ZStack {
+                Map(position: $position) {
+                    UserAnnotation()
+
+                    if let pin = session.pin, !routeModeActive {
+                        Annotation("", coordinate: pin, anchor: .bottom) {
+                            dropPinView(proxy: proxy)
+                        }
+                    }
+
+                    waypointAnnotations
+
+                    if let sim = session.simulated {
+                        Annotation("Spoof", coordinate: sim) {
+                            spoofPuckView
+                        }
+                    }
+
+                    routePolylines
+                }
+                .mapStyle(mapStyle)
+                .mapControlVisibility(.hidden)
+                .onTapGesture { point in
+                    searchFocused = false
+                    guard !suppressNextMapTap, !isDraggingPin else { return }
+                    handleMapTap(at: point, proxy: proxy)
+                }
+
+                if routeModeActive && routeMethod == .freehand && !session.isFollowingRoute {
+                    FreehandCanvasTouchOverlay(
+                        isDrawingEnabled: isFreehandDrawingMode,
+                        onPoint: { point in
+                            handleFreehandDrag(at: point, proxy: proxy)
+                        },
+                        onEnded: {
+                            handleFreehandDragEnd()
+                        }
+                    )
+                }
+            }
+        }
+        .background(Color.black.ignoresSafeArea())
+    }
+
+    @ViewBuilder
+    private var completionFlashOverlay: some View {
+        if session.routeFinishedFlash {
+            ThemePreference.completionFlashColor
+                .opacity(0.4)
+                .ignoresSafeArea()
+                .transition(.opacity)
+                .allowsHitTesting(false)
+        }
+    }
+
+    @ViewBuilder
+    private var favoriteCelebrationOverlay: some View {
+        if showFavoriteAnimation {
+            VStack {
+                Spacer()
+                HStack(spacing: 8) {
+                    Image(systemName: "star.fill")
+                        .font(.body.weight(.black))
+                        .foregroundStyle(.yellow)
+                    Text("Saved to Favorites!")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.primary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Capsule().fill(Color(UIColor.secondarySystemBackground)).shadow(color: LocusTheme.accent.opacity(0.4), radius: 12, y: 4))
+                .transition(.scale.combined(with: .opacity))
+                .padding(.bottom, 100)
+            }
+        }
+    }
+
+    private var routePlannerSheetView: some View {
+        RoutePlannerSheet(
+            method: $routeMethod,
+            connectionType: $routeConnectionType,
+            waypoints: $waypoints,
+            freehandCoordinates: $freehandCoordinates,
+            calculatedRoute: $calculatedRoute,
+            isRouting: $isRouting,
+            loopRoute: $loopRoute,
+            onBuildRoute: buildPointsRoute,
+            onPlayRoute: playRoute,
+            onStopRoute: {
+                showEndSpoofConfirmation = true
+            },
+            onImportGPX: {},
+            onExportGPX: {},
+            onSmoothFreehand: smoothFreehandRoute,
+            onClearRoute: clearAllRouteData,
+            onAddPinAsWaypoint: addPinAsWaypoint,
+            onAddSpoofAsWaypoint: addSpoofAsWaypoint,
+            onLoadRoute: loadSavedRoute
+        )
+        .presentationDetents([.medium, .large])
+    }
+
+    private var stopPickerBinding: Binding<Bool> {
+        Binding(
+            get: { editingStopWaypointIndex != nil },
+            set: { if !$0 { editingStopWaypointIndex = nil } }
+        )
+    }
+
+    @ViewBuilder
+    private var stopPickerSheetView: some View {
+        if let idx = editingStopWaypointIndex, waypoints.indices.contains(idx) {
+            StopDurationPickerSheet(
+                waypointIndex: idx,
+                waypointName: waypoints[idx].name,
+                initialDuration: waypoints[idx].stopDuration
+            ) { newDuration in
+                waypoints[idx].stopDuration = newDuration
+                if session.isFollowingRoute {
+                    session.updateActiveRoute(displayRouteCoordinates, waypoints: waypoints, loop: loopRoute)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var saveRouteAlertView: some View {
+        TextField("Route Name", text: $mapSaveRouteName)
+        Button("Save") {
+            SoundManager.play(.success)
+            saveCurrentRouteFromMap()
+        }
+        Button("Cancel", role: .cancel) {}
+    }
+
+    @ViewBuilder
+    private var endSpoofAlertView: some View {
+        Button("End Spoof", role: .destructive) {
+            SoundManager.play(.alert)
+            withAnimation {
+                session.stopRoute()
+            }
+        }
+        Button("Continue Route", role: .cancel) {
+            SoundManager.play(.tap)
+        }
+    }
+
+    @ViewBuilder
+    private var favoritePromptAlertView: some View {
+        TextField("Place Name", text: $favoriteNameInput)
+        Button("Save") {
+            if let coord = pendingFavoriteCoordinate {
+                let finalName = favoriteNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Favorite Place" : favoriteNameInput
+                session.addFavorite(name: finalName, coordinate: coord)
+                SoundManager.play(.success)
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
+                    showFavoriteAnimation = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    withAnimation { showFavoriteAnimation = false }
+                }
+            }
+        }
+        Button("Cancel", role: .cancel) {}
+    }
+
+    private func handleOnAppear() {
+        session.startLocationUpdates()
+        routeConnectionType = session.defaultConnectionType
+        withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+            puckPulsing = true
+        }
+    }
+
+    private func handleDefaultConnectionTypeChange(_ old: RouteConnectionType, _ newDefault: RouteConnectionType) {
+        if waypoints.isEmpty {
+            routeConnectionType = newDefault
+        }
+    }
+
+    private func handlePathAnimationTick(_ date: Date) {
+        if session.isFollowingRoute && !session.isRoutePaused {
+            pathDashPhase -= 1.6
         }
     }
 
@@ -481,6 +525,7 @@ struct MapHomeView: View {
         .animation(.spring(response: 0.32, dampingFraction: 0.8), value: routeModeActive || session.isFollowingRoute)
     }
 
+    @ViewBuilder
     private var routeControlPanel: some View {
         VStack(spacing: 8) {
             if session.isFollowingRoute {
@@ -506,181 +551,186 @@ struct MapHomeView: View {
                     }
                 )
             } else {
-                // Method Switcher: Points vs Freehand
-                HStack(spacing: 8) {
-                    Button {
-                        SoundManager.play(.tap)
-                        withAnimation { routeMethod = .points }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "mappin.and.ellipse")
-                            Text("Points")
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(routeMethod == .points ? .black : .primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(
-                            Capsule().fill(routeMethod == .points ? LocusTheme.accent : Color.primary.opacity(0.08))
-                        )
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        SoundManager.play(.tap)
-                        withAnimation { routeMethod = .freehand }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "pencil.and.scribble")
-                            Text("Freehand")
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(routeMethod == .freehand ? .black : .primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(
-                            Capsule().fill(routeMethod == .freehand ? LocusTheme.accent : Color.primary.opacity(0.08))
-                        )
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        withAnimation {
-                            routeModeActive = false
-                        }
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 36, height: 36)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                // Quick Info & Action Row with ETA
-                HStack(spacing: 8) {
-                    let totalDist = RouteBuilder.totalDistance(of: displayRouteCoordinates)
-                    let estDuration = RouteBuilder.estimatedDuration(distance: totalDist, speed: session.currentSpeedMPS)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        if routeMethod == .points {
-                            Text(waypoints.isEmpty ? "Tap map to add points" : "\(waypoints.count) Points • \(RouteBuilder.formattedDistance(totalDist))")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.primary)
-                        } else {
-                            Text(freehandCoordinates.isEmpty ? (isFreehandDrawingMode ? "1 finger draws • 2 fingers scroll" : "Scroll & move map freely") : "Drawn Path • \(RouteBuilder.formattedDistance(totalDist))")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.primary)
-                        }
-
-                        if displayRouteCoordinates.count >= 2 {
-                            HStack(spacing: 4) {
-                                Image(systemName: "clock.fill")
-                                    .font(.caption2)
-                                    .foregroundStyle(LocusTheme.accent)
-                                Text("ETA: \(RouteBuilder.formattedETA(estDuration))")
-                                    .font(.caption2.weight(.medium))
-                                    .foregroundStyle(LocusTheme.accent)
-                            }
-                        }
-                    }
-
-                    Spacer()
-
-                    if routeMethod == .freehand {
-                        Button {
-                            withAnimation {
-                                isFreehandDrawingMode.toggle()
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: isFreehandDrawingMode ? "pencil.tip" : "hand.raised.fill")
-                                Text(isFreehandDrawingMode ? "Draw" : "Pan")
-                            }
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(isFreehandDrawingMode ? .black : .primary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .background(
-                                Capsule().fill(isFreehandDrawingMode ? LocusTheme.accentSecondary : Color.primary.opacity(0.12))
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    if routeMethod == .points && !waypoints.isEmpty {
-                        Button {
-                            waypoints.removeLast()
-                            if waypoints.count >= 2 {
-                                buildPointsRoute()
-                            } else {
-                                calculatedRoute.removeAll()
-                            }
-                        } label: {
-                            Image(systemName: "arrow.uturn.backward.circle.fill")
-                                .font(.body)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                    }
-
-                    if routeMethod == .freehand && !freehandCoordinates.isEmpty {
-                        Button {
-                            clearAllRouteData()
-                        } label: {
-                            Image(systemName: "trash.circle.fill")
-                                .font(.body)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                    }
-
-                    Button {
-                        showRouteSheet = true
-                    } label: {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.body.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(LocusTheme.accent)
-
-                    if displayRouteCoordinates.count >= 2 {
-                        Button {
-                            mapSaveRouteName = SavedRoute.suggestedName(
-                                waypoints: waypoints,
-                                method: routeMethod,
-                                distance: totalDist
-                            )
-                            showMapSaveRouteAlert = true
-                        } label: {
-                            Image(systemName: "bookmark")
-                                .font(.body.weight(.semibold))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(LocusTheme.accent)
-                        .accessibilityLabel("Save Route")
-
-                        Button {
-                            playRoute()
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "play.fill")
-                                Text("Follow")
-                                    .font(.caption.weight(.bold))
-                            }
-                            .foregroundStyle(.black)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Capsule().fill(LocusTheme.statusGood))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+                routeMethodSwitcher
+                routeSummaryActionBar
             }
         }
         .padding(12)
         .locusGlass(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var routeMethodSwitcher: some View {
+        HStack(spacing: 8) {
+            Button {
+                SoundManager.play(.tap)
+                withAnimation { routeMethod = .points }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "mappin.and.ellipse")
+                    Text("Points")
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(routeMethod == .points ? .black : .primary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(
+                    Capsule().fill(routeMethod == .points ? LocusTheme.accent : Color.primary.opacity(0.08))
+                )
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                SoundManager.play(.tap)
+                withAnimation { routeMethod = .freehand }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "pencil.and.scribble")
+                    Text("Freehand")
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(routeMethod == .freehand ? .black : .primary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(
+                    Capsule().fill(routeMethod == .freehand ? LocusTheme.accent : Color.primary.opacity(0.08))
+                )
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                withAnimation {
+                    routeModeActive = false
+                }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var routeSummaryActionBar: some View {
+        let totalDist = RouteBuilder.totalDistance(of: displayRouteCoordinates)
+        let estDuration = RouteBuilder.estimatedDuration(distance: totalDist, speed: session.currentSpeedMPS)
+
+        return HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                if routeMethod == .points {
+                    Text(waypoints.isEmpty ? "Tap map to add points" : "\(waypoints.count) Points • \(RouteBuilder.formattedDistance(totalDist))")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                } else {
+                    Text(freehandCoordinates.isEmpty ? (isFreehandDrawingMode ? "1 finger draws • 2 fingers scroll" : "Scroll & move map freely") : "Drawn Path • \(RouteBuilder.formattedDistance(totalDist))")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                }
+
+                if displayRouteCoordinates.count >= 2 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock.fill")
+                            .font(.caption2)
+                            .foregroundStyle(LocusTheme.accent)
+                        Text("ETA: \(RouteBuilder.formattedETA(estDuration))")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(LocusTheme.accent)
+                    }
+                }
+            }
+
+            Spacer()
+
+            if routeMethod == .freehand {
+                Button {
+                    withAnimation {
+                        isFreehandDrawingMode.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: isFreehandDrawingMode ? "pencil.tip" : "hand.raised.fill")
+                        Text(isFreehandDrawingMode ? "Draw" : "Pan")
+                    }
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(isFreehandDrawingMode ? .black : .primary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule().fill(isFreehandDrawingMode ? LocusTheme.accentSecondary : Color.primary.opacity(0.12))
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
+            if routeMethod == .points && !waypoints.isEmpty {
+                Button {
+                    waypoints.removeLast()
+                    if waypoints.count >= 2 {
+                        buildPointsRoute()
+                    } else {
+                        calculatedRoute.removeAll()
+                    }
+                } label: {
+                    Image(systemName: "arrow.uturn.backward.circle.fill")
+                        .font(.body)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+
+            if routeMethod == .freehand && !freehandCoordinates.isEmpty {
+                Button {
+                    clearAllRouteData()
+                } label: {
+                    Image(systemName: "trash.circle.fill")
+                        .font(.body)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+
+            Button {
+                showRouteSheet = true
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.body.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(LocusTheme.accent)
+
+            if displayRouteCoordinates.count >= 2 {
+                Button {
+                    mapSaveRouteName = SavedRoute.suggestedName(
+                        waypoints: waypoints,
+                        method: routeMethod,
+                        distance: totalDist
+                    )
+                    showMapSaveRouteAlert = true
+                } label: {
+                    Image(systemName: "bookmark")
+                        .font(.body.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LocusTheme.accent)
+                .accessibilityLabel("Save Route")
+
+                Button {
+                    playRoute()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "play.fill")
+                        Text("Follow")
+                            .font(.caption.weight(.bold))
+                    }
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(LocusTheme.statusGood))
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     private var searchBar: some View {
