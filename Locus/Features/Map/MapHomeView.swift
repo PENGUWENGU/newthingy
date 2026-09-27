@@ -71,96 +71,21 @@ struct MapHomeView: View {
                     Map(position: $position) {
                         UserAnnotation()
 
-                        // Single dropped pin (when not in route mode or when placing pins)
                         if let pin = session.pin, !routeModeActive {
                             Annotation("", coordinate: pin, anchor: .bottom) {
                                 dropPinView(proxy: proxy)
                             }
                         }
 
-                        // Waypoint Annotations (Points method)
-                        if routeModeActive && routeMethod == .points {
-                            ForEach(Array(waypoints.enumerated()), id: \.element.id) { index, wp in
-                                Annotation("", coordinate: wp.coordinate, anchor: .center) {
-                                    waypointPinView(index: index, wp: wp)
-                                }
-                            }
-                        }
+                        waypointAnnotations
 
-                        // Simulated Spoof Puck with active motion beacon
                         if let sim = session.simulated {
                             Annotation("Spoof", coordinate: sim) {
                                 spoofPuckView
                             }
                         }
 
-                        // Route Polyline with Smooth Progress Transition & Directional Flow
-                        if session.isFollowingRoute && !session.remainingRouteCoordinates.isEmpty {
-                            // 1. Completed Path Trail: smooth dimmed dashed line behind user
-                            if session.completedRouteCoordinates.count > 1 {
-                                MapPolyline(coordinates: session.completedRouteCoordinates)
-                                    .stroke(
-                                        routeMethod == .freehand ? LocusTheme.accentSecondary.opacity(0.3) : LocusTheme.accent.opacity(0.3),
-                                        style: StrokeStyle(lineWidth: max(3, session.pathWidth.width - 1.5), lineCap: .round, lineJoin: .round, dash: [6, 4])
-                                    )
-                            }
-
-                            // 2. Remaining Path: vibrant upcoming path towards destination
-                            if session.remainingRouteCoordinates.count > 1 {
-                                // Subtle glow underlay
-                                MapPolyline(coordinates: session.remainingRouteCoordinates)
-                                    .stroke(
-                                        (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.35),
-                                        style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
-                                    )
-
-                                // Main prominent polyline
-                                MapPolyline(coordinates: session.remainingRouteCoordinates)
-                                    .stroke(
-                                        routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
-                                        style: StrokeStyle(lineWidth: session.pathWidth.width, lineCap: .round, lineJoin: .round)
-                                    )
-
-                                // Directional animated progress line flowing towards destination
-                                MapPolyline(coordinates: session.remainingRouteCoordinates)
-                                    .stroke(
-                                        Color.white.opacity(session.isRoutePaused ? 0.25 : 0.75),
-                                        style: StrokeStyle(
-                                            lineWidth: max(2, session.pathWidth.width * 0.45),
-                                            lineCap: .round,
-                                            lineJoin: .round,
-                                            dash: [8, 12],
-                                            dashPhase: pathDashPhase
-                                        )
-                                    )
-                            }
-                        } else if displayRouteCoordinates.count > 1 {
-                            // Preview Polyline with glow underlay
-                            MapPolyline(coordinates: displayRouteCoordinates)
-                                .stroke(
-                                    (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.25),
-                                    style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
-                                )
-
-                            MapPolyline(coordinates: displayRouteCoordinates)
-                                .stroke(
-                                    routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
-                                    style: StrokeStyle(
-                                        lineWidth: session.pathWidth.width,
-                                        lineCap: .round,
-                                        lineJoin: .round
-                                    )
-                                )
-                        }
-
-                        // Freehand active drawing trail
-                        if routeModeActive && routeMethod == .freehand && freehandCoordinates.count > 1 && calculatedRoute.isEmpty {
-                            MapPolyline(coordinates: freehandCoordinates)
-                                .stroke(
-                                    LocusTheme.accentSecondary,
-                                    style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [4, 4])
-                                )
-                        }
+                        routePolylines
                     }
                     .mapStyle(mapStyle)
                     .mapControlVisibility(.hidden)
@@ -937,6 +862,81 @@ struct MapHomeView: View {
                 editingStopWaypointIndex = index
             }
         )
+    }
+
+    @MapContentBuilder
+    private var waypointAnnotations: some MapContent {
+        if routeModeActive && routeMethod == .points {
+            ForEach(waypoints) { wp in
+                Annotation("", coordinate: wp.coordinate, anchor: .center) {
+                    let idx = waypoints.firstIndex(where: { $0.id == wp.id }) ?? 0
+                    waypointPinView(index: idx, wp: wp)
+                }
+            }
+        }
+    }
+
+    @MapContentBuilder
+    private var routePolylines: some MapContent {
+        if session.isFollowingRoute && !session.remainingRouteCoordinates.isEmpty {
+            if session.completedRouteCoordinates.count > 1 {
+                MapPolyline(coordinates: session.completedRouteCoordinates)
+                    .stroke(
+                        routeMethod == .freehand ? LocusTheme.accentSecondary.opacity(0.3) : LocusTheme.accent.opacity(0.3),
+                        style: StrokeStyle(lineWidth: max(3, session.pathWidth.width - 1.5), lineCap: .round, lineJoin: .round, dash: [6, 4])
+                    )
+            }
+
+            if session.remainingRouteCoordinates.count > 1 {
+                MapPolyline(coordinates: session.remainingRouteCoordinates)
+                    .stroke(
+                        (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.35),
+                        style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
+                    )
+
+                MapPolyline(coordinates: session.remainingRouteCoordinates)
+                    .stroke(
+                        routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
+                        style: StrokeStyle(lineWidth: session.pathWidth.width, lineCap: .round, lineJoin: .round)
+                    )
+
+                MapPolyline(coordinates: session.remainingRouteCoordinates)
+                    .stroke(
+                        Color.white.opacity(session.isRoutePaused ? 0.25 : 0.75),
+                        style: StrokeStyle(
+                            lineWidth: max(2, session.pathWidth.width * 0.45),
+                            lineCap: .round,
+                            lineJoin: .round,
+                            dash: [8, 12],
+                            dashPhase: pathDashPhase
+                        )
+                    )
+            }
+        } else if displayRouteCoordinates.count > 1 {
+            MapPolyline(coordinates: displayRouteCoordinates)
+                .stroke(
+                    (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.25),
+                    style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
+                )
+
+            MapPolyline(coordinates: displayRouteCoordinates)
+                .stroke(
+                    routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
+                    style: StrokeStyle(
+                        lineWidth: session.pathWidth.width,
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
+                )
+        }
+
+        if routeModeActive && routeMethod == .freehand && freehandCoordinates.count > 1 && calculatedRoute.isEmpty {
+            MapPolyline(coordinates: freehandCoordinates)
+                .stroke(
+                    LocusTheme.accentSecondary,
+                    style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [4, 4])
+                )
+        }
     }
 
     private var spoofPuckView: some View {
