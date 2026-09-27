@@ -510,8 +510,9 @@ final class SpoofSession: ObservableObject {
     /// Dynamically updates the active route when waypoints or path is modified during execution or pause
     func updateActiveRoute(
         newCoordinates: [CLLocationCoordinate2D],
-        newWaypoints: [RouteWaypoint],
-        pairing: PairingStore
+        newWaypoints: [RouteWaypoint] = [],
+        pairing: PairingStore,
+        loop: Bool = false
     ) {
         guard isFollowingRoute, let currentPos = simulated ?? newCoordinates.first else { return }
         var spliced: [CLLocationCoordinate2D] = [currentPos]
@@ -529,7 +530,7 @@ final class SpoofSession: ObservableObject {
             waypoints: newWaypoints,
             destinationName: routeDestinationName,
             pairing: pairing,
-            loop: false
+            loop: loop
         )
         if wasPaused {
             isRoutePaused = true

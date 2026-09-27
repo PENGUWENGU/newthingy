@@ -224,7 +224,12 @@ struct MapHomeView: View {
             ) { newDuration in
                 waypoints[idx].stopDuration = newDuration
                 if session.isFollowingRoute {
-                    session.updateActiveRoute(displayRouteCoordinates, waypoints: waypoints, loop: loopRoute)
+                    session.updateActiveRoute(
+                        newCoordinates: displayRouteCoordinates,
+                        newWaypoints: waypoints,
+                        pairing: pairing,
+                        loop: loopRoute
+                    )
                 }
             }
         }
