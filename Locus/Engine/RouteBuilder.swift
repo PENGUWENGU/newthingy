@@ -58,6 +58,25 @@ enum RouteConnectionType: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Route Connection Preference
+
+enum RouteConnectionPreference {
+    static let key = "locus.default_connection_type"
+
+    static var defaultType: RouteConnectionType {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: key),
+                  let type = RouteConnectionType(rawValue: raw) else {
+                return .road
+            }
+            return type
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: key)
+        }
+    }
+}
+
 // MARK: - Route Waypoint Model
 
 struct RouteWaypoint: Identifiable, Equatable, Hashable {

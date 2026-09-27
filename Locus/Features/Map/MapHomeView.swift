@@ -14,7 +14,7 @@ struct MapHomeView: View {
     // Route Mode State (Points & Freehand)
     @State private var routeModeActive = false
     @State private var routeMethod: RouteCreationMethod = .points
-    @State private var routeConnectionType: RouteConnectionType = .road
+    @State private var routeConnectionType: RouteConnectionType = RouteConnectionPreference.defaultType
     @State private var waypoints: [RouteWaypoint] = []
     @State private var freehandCoordinates: [CLLocationCoordinate2D] = []
     @State private var calculatedRoute: [CLLocationCoordinate2D] = []
@@ -27,6 +27,9 @@ struct MapHomeView: View {
     @State private var importedGPXTrack: GPXTrack?
     @State private var showMapSaveRouteAlert = false
     @State private var mapSaveRouteName = ""
+    @State private var pathDashPhase: CGFloat = 0
+    @State private var puckPulsing = false
+    private let pathAnimationTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     // Standard Pin State
     @State private var pinSelected = false
@@ -126,19 +129,74 @@ struct MapHomeView: View {
                             }
                         }
 
-                        // Simulated Spoof Puck
+                        // Simulated Spoof Puck with active motion beacon
                         if let sim = session.simulated {
                             Annotation("Spoof", coordinate: sim) {
                                 ZStack {
-                                    Circle().fill(LocusTheme.accent.opacity(0.25)).frame(width: 44, height: 44)
-                                    Circle().fill(LocusTheme.accent).frame(width: 14, height: 14)
+                                    if session.isFollowingRoute {
+                                        Circle()
+                                            .stroke((session.isRoutePaused ? Color.orange : LocusTheme.accent).opacity(0.6), lineWidth: 2)
+                                            .frame(width: 44, height: 44)
+                                            .scaleEffect(session.isRoutePaused ? 1.0 : (puckPulsing ? 1.35 : 0.85))
+                                            .opacity(session.isRoutePaused ? 0.6 : (puckPulsing ? 0.0 : 0.85))
+                                    }
+                                    Circle().fill((session.isRoutePaused ? Color.orange : LocusTheme.accent).opacity(0.25))
+                                        .frame(width: 38, height: 38)
+                                    Circle().fill(session.isRoutePaused ? Color.orange : LocusTheme.accent)
+                                        .frame(width: 14, height: 14)
                                         .overlay(Circle().stroke(.white, lineWidth: 2))
                                 }
                             }
                         }
 
-                        // Calculated / Main Route Polyline
-                        if displayRouteCoordinates.count > 1 {
+                        // Route Polyline with Smooth Progress Transition & Directional Flow
+                        if session.isFollowingRoute && !session.remainingRouteCoordinates.isEmpty {
+                            // 1. Completed Path Trail: smooth dimmed dashed line behind user
+                            if session.completedRouteCoordinates.count > 1 {
+                                MapPolyline(coordinates: session.completedRouteCoordinates)
+                                    .stroke(
+                                        routeMethod == .freehand ? LocusTheme.accentSecondary.opacity(0.3) : LocusTheme.accent.opacity(0.3),
+                                        style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [6, 4])
+                                    )
+                            }
+
+                            // 2. Remaining Path: vibrant upcoming path towards destination
+                            if session.remainingRouteCoordinates.count > 1 {
+                                // Subtle glow underlay
+                                MapPolyline(coordinates: session.remainingRouteCoordinates)
+                                    .stroke(
+                                        (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.35),
+                                        style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round)
+                                    )
+
+                                // Main prominent polyline
+                                MapPolyline(coordinates: session.remainingRouteCoordinates)
+                                    .stroke(
+                                        routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
+                                        style: StrokeStyle(lineWidth: 5.5, lineCap: .round, lineJoin: .round)
+                                    )
+
+                                // Directional animated progress line flowing towards destination
+                                MapPolyline(coordinates: session.remainingRouteCoordinates)
+                                    .stroke(
+                                        Color.white.opacity(session.isRoutePaused ? 0.25 : 0.75),
+                                        style: StrokeStyle(
+                                            lineWidth: 2.5,
+                                            lineCap: .round,
+                                            lineJoin: .round,
+                                            dash: [8, 12],
+                                            dashPhase: pathDashPhase
+                                        )
+                                    )
+                            }
+                        } else if displayRouteCoordinates.count > 1 {
+                            // Preview Polyline with glow underlay
+                            MapPolyline(coordinates: displayRouteCoordinates)
+                                .stroke(
+                                    (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.25),
+                                    style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round)
+                                )
+
                             MapPolyline(coordinates: displayRouteCoordinates)
                                 .stroke(
                                     routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
@@ -168,7 +226,7 @@ struct MapHomeView: View {
                     }
 
                     // Freehand Drawing Drag Gesture Capture Layer
-                    if routeModeActive && routeMethod == .freehand {
+                    if routeModeActive && routeMethod == .freehand && !session.isFollowingRoute {
                         Color.black.opacity(0.001)
                             .gesture(
                                 DragGesture(minimumDistance: 1, coordinateSpace: .local)
@@ -188,6 +246,20 @@ struct MapHomeView: View {
         }
         .onAppear {
             session.startLocationUpdates()
+            routeConnectionType = session.defaultConnectionType
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                puckPulsing = true
+            }
+        }
+        .onChange(of: session.defaultConnectionType) { _, newDefault in
+            if waypoints.isEmpty {
+                routeConnectionType = newDefault
+            }
+        }
+        .onReceive(pathAnimationTimer) { _ in
+            if session.isFollowingRoute && !session.isRoutePaused {
+                pathDashPhase -= 1.6
+            }
         }
         .onChange(of: session.pin?.latitude) { _, newValue in
             if newValue == nil { pinSelected = false }
@@ -365,6 +437,11 @@ struct MapHomeView: View {
         guard path.count >= 2 else {
             session.lastError = "Add at least 2 points or draw a freehand path first."
             return
+        }
+        if routeMethod == .freehand {
+            withAnimation {
+                routeMethod = .points
+            }
         }
         session.followRoute(path, pairing: pairing, loop: loopRoute)
     }

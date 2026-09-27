@@ -96,6 +96,21 @@ struct SettingsView: View {
                     Text("Connect LocalDevVPN before teleporting. Default tunnel IP is 10.7.0.1. Start a spoof on Wi‑Fi first; it can keep working on cellular afterward.")
                 }
 
+                Section {
+                    Picker("Default Connection Mode", selection: Binding(
+                        get: { session.defaultConnectionType },
+                        set: { session.setDefaultConnectionType($0) }
+                    )) {
+                        ForEach(RouteConnectionType.allCases) { type in
+                            Label(type.rawValue, systemImage: type.icon).tag(type)
+                        }
+                    }
+                } header: {
+                    Text("Routing Defaults")
+                } footer: {
+                    Text("Choose the default connection mode for Points routes. 'Roads' calculates street routes with Apple Maps; 'Straight' connects waypoints with direct straight lines.")
+                }
+
                 Section("Privacy") {
                     Text("Fully on-device. Favorites, recents, and saved routes stay in UserDefaults on your device. No analytics, no accounts, nothing uploaded.")
                         .font(.footnote)

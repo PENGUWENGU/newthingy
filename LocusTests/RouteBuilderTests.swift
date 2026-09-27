@@ -97,4 +97,17 @@ final class RouteBuilderTests: XCTestCase {
         XCTAssertTrue(etaMinutes.contains("("))
         XCTAssertTrue(etaMinutes.contains(")"))
     }
+
+    func testRouteConnectionPreferencePersistence() {
+        let original = RouteConnectionPreference.defaultType
+        defer {
+            RouteConnectionPreference.defaultType = original
+        }
+
+        RouteConnectionPreference.defaultType = .straight
+        XCTAssertEqual(RouteConnectionPreference.defaultType, .straight)
+
+        RouteConnectionPreference.defaultType = .road
+        XCTAssertEqual(RouteConnectionPreference.defaultType, .road)
+    }
 }

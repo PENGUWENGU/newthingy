@@ -50,10 +50,13 @@ final class SpoofSession: ObservableObject {
     @Published var routeProgress: Double = 0.0
     @Published var remainingRouteDistance: CLLocationDistance = 0.0
     @Published var remainingRouteDuration: TimeInterval = 0.0
+    @Published var completedRouteCoordinates: [CLLocationCoordinate2D] = []
+    @Published var remainingRouteCoordinates: [CLLocationCoordinate2D] = []
 
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
     @Published var savedRoutes: [SavedRoute] = []
+    @Published var defaultConnectionType: RouteConnectionType = RouteConnectionPreference.defaultType
 
     private var resendTimer: Timer?
     private var healthTimer: Timer?
@@ -71,7 +74,13 @@ final class SpoofSession: ObservableObject {
         favorites = SavedPlace.load(key: favoritesKey)
         recents = SavedPlace.load(key: recentsKey)
         savedRoutes = SavedRoute.load(key: savedRoutesKey)
+        defaultConnectionType = RouteConnectionPreference.defaultType
         customSpeedMPS = SpeedPreference.storedValue
+    }
+
+    func setDefaultConnectionType(_ type: RouteConnectionType) {
+        defaultConnectionType = type
+        RouteConnectionPreference.defaultType = type
     }
 
     var isSpoofing: Bool {
@@ -147,6 +156,8 @@ final class SpoofSession: ObservableObject {
         routeProgress = 0.0
         remainingRouteDistance = 0.0
         remainingRouteDuration = 0.0
+        completedRouteCoordinates = []
+        remainingRouteCoordinates = []
     }
 
     func pauseRoute() {
@@ -241,6 +252,8 @@ final class SpoofSession: ObservableObject {
                     self.routeProgress = 0.0
                     self.remainingRouteDistance = totalRouteDistance
                     self.remainingRouteDuration = RouteBuilder.estimatedDuration(distance: totalRouteDistance, speed: self.currentSpeedMPS)
+                    self.completedRouteCoordinates = [previous]
+                    self.remainingRouteCoordinates = coordinates
                 }
                 let totalSegments = max(1, coordinates.count - 1)
                 for (idx, next) in coordinates.dropFirst().enumerated() {
@@ -287,10 +300,16 @@ final class SpoofSession: ObservableObject {
                         let remainingDistance = remainingInSegment + suffixDistances[idx + 1]
                         let remainingDuration = RouteBuilder.estimatedDuration(distance: remainingDistance, speed: self.currentSpeedMPS)
 
+                        // Slices for animated polyline progress
+                        let completedSlice = Array(coordinates[0...idx]) + [coord]
+                        let remainingSlice = [coord] + Array(coordinates[(idx + 1)...])
+
                         await MainActor.run {
                             self.apply(coord, pairing: pairing, markRecent: false)
                             self.remainingRouteDistance = remainingDistance
                             self.remainingRouteDuration = remainingDuration
+                            self.completedRouteCoordinates = completedSlice
+                            self.remainingRouteCoordinates = remainingSlice
                         }
                     }
 
@@ -309,6 +328,8 @@ final class SpoofSession: ObservableObject {
                 self.routeProgress = 0.0
                 self.remainingRouteDistance = 0.0
                 self.remainingRouteDuration = 0.0
+                self.completedRouteCoordinates = []
+                self.remainingRouteCoordinates = []
             }
         }
     }

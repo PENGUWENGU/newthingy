@@ -77,6 +77,27 @@ struct RoutePlannerSheet: View {
                             }
                         }
                         .pickerStyle(.segmented)
+
+                        HStack {
+                            Text("Default Mode")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            if session.defaultConnectionType == connectionType {
+                                Label("Default", systemImage: "checkmark.seal.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(LocusTheme.statusGood)
+                            } else {
+                                Button("Set as Default") {
+                                    withAnimation {
+                                        session.setDefaultConnectionType(connectionType)
+                                    }
+                                }
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(LocusTheme.accent)
+                            }
+                        }
+                        .padding(.vertical, 2)
                     }
 
                     Section {

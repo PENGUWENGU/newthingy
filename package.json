@@ -1,0 +1,11 @@
+{
+  "name": "locus-web-companion",
+  "version": "1.0.0",
+  "description": "Locus - Native iOS Location Simulation Companion & Route Simulator",
+  "private": true,
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "echo 'Build OK'"
+  }
+}
