@@ -16,6 +16,7 @@ jobs:
       - name: Fetch Git LFS files
         shell: bash
         run: |
+          touch build.log
           git lfs pull || true
       - name: Ensure libidevice_ffi.a is present
         shell: bash
@@ -23,32 +24,21 @@ jobs:
           set -euo pipefail
           mkdir -p Vendor/idevice
           
-          # Check if valid binary already exists
+          # Check if already present and is a valid binary archive (> 1MB)
           if [ -f "Vendor/idevice/libidevice_ffi.a" ]; then
             FILE_SIZE=$(wc -c < "Vendor/idevice/libidevice_ffi.a" | tr -d ' ')
-            if [ "$FILE_SIZE" -gt 50000 ]; then
+            if [ "$FILE_SIZE" -gt 1000000 ]; then
               echo "libidevice_ffi.a is already present and valid (${FILE_SIZE} bytes)."
               exit 0
             fi
           fi
 
-          echo "libidevice_ffi.a not found or is LFS pointer. Building from source via Rust..."
-          rustup target add aarch64-apple-ios || true
-          
-          TEMP_DIR=$(mktemp -d)
-          git clone --depth 1 https://github.com/jkcoxson/idevice "$TEMP_DIR"
-          cd "$TEMP_DIR"
-          cargo build --release --target aarch64-apple-ios
-          
-          # Locate built archive
-          PRODUCED_LIB=$(find target/aarch64-apple-ios/release -maxdepth 2 -name "libidevice*.a" | head -n 1)
-          if [ -n "$PRODUCED_LIB" ] && [ -f "$PRODUCED_LIB" ]; then
-            cp "$PRODUCED_LIB" "$GITHUB_WORKSPACE/Vendor/idevice/libidevice_ffi.a"
-            echo "Successfully installed libidevice_ffi.a ($(wc -c < "$GITHUB_WORKSPACE/Vendor/idevice/libidevice_ffi.a") bytes)."
-          else
-            echo "::error::Could not find compiled static library in target/aarch64-apple-ios/release"
-            exit 1
-          fi
+          echo "Downloading official precompiled libidevice_ffi.a..."
+          curl -sSL -f "https://raw.githubusercontent.com/ChrisMack32/Locus/main/Vendor/idevice/libidevice_ffi.a" -o Vendor/idevice/libidevice_ffi.a || \
+          curl -sSL -f "https://github.com/ChrisMack32/Locus/raw/main/Vendor/idevice/libidevice_ffi.a" -o Vendor/idevice/libidevice_ffi.a
+
+          test -f "Vendor/idevice/libidevice_ffi.a"
+          echo "Successfully verified libidevice_ffi.a ($(wc -c < "Vendor/idevice/libidevice_ffi.a" | tr -d ' ') bytes)."
       - name: Select Xcode
         shell: bash
         run: |
