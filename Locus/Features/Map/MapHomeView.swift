@@ -685,21 +685,6 @@ struct MapHomeView: View {
                         )
                     }
                     .buttonStyle(.plain)
-                }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "pencil.tip.crop.circle")
-                            Text("Freehand")
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(routeMethod == .freehand ? .black : .primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(
-                            Capsule().fill(routeMethod == .freehand ? LocusTheme.accentSecondary : Color.primary.opacity(0.08))
-                        )
-                    }
-                    .buttonStyle(.plain)
 
                     Button {
                         withAnimation {

@@ -3,9 +3,26 @@ import CoreLocation
 
 struct TransitRouteBannerView: View {
     @ObservedObject var session: SpoofSession
-    var onEndRouteRequest: () -> Void
+    var onTogglePause: (() -> Void)? = nil
+    var onStop: (() -> Void)? = nil
+    var onSkipStop: (() -> Void)? = nil
+    var onOpenPlanner: (() -> Void)? = nil
 
     @State private var isCollapsed: Bool = false
+
+    init(
+        session: SpoofSession,
+        onTogglePause: (() -> Void)? = nil,
+        onStop: (() -> Void)? = nil,
+        onSkipStop: (() -> Void)? = nil,
+        onOpenPlanner: (() -> Void)? = nil
+    ) {
+        self.session = session
+        self.onTogglePause = onTogglePause
+        self.onStop = onStop
+        self.onSkipStop = onSkipStop
+        self.onOpenPlanner = onOpenPlanner
+    }
 
     private var arrivalTimeString: String {
         let arrivalDate = Date().addingTimeInterval(session.remainingRouteDuration)
@@ -113,8 +130,12 @@ struct TransitRouteBannerView: View {
                         Spacer()
 
                         Button {
-                            SoundManager.play(.toggle)
-                            session.skipCurrentStop()
+                            if let onSkipStop {
+                                onSkipStop()
+                            } else {
+                                SoundManager.play(.toggle)
+                                session.skipCurrentStop()
+                            }
                         } label: {
                             HStack(spacing: 3) {
                                 Image(systemName: "forward.fill")
@@ -189,9 +210,13 @@ struct TransitRouteBannerView: View {
                     // Control Buttons: Pause/Resume, Stop Route (with confirmation)
                     HStack(spacing: 12) {
                         Button {
-                            SoundManager.play(.toggle)
-                            withAnimation {
-                                session.togglePauseRoute()
+                            if let onTogglePause {
+                                onTogglePause()
+                            } else {
+                                SoundManager.play(.toggle)
+                                withAnimation {
+                                    session.togglePauseRoute()
+                                }
                             }
                         } label: {
                             HStack(spacing: 5) {
@@ -207,8 +232,12 @@ struct TransitRouteBannerView: View {
                         .buttonStyle(.plain)
 
                         Button {
-                            SoundManager.play(.alert)
-                            onEndRouteRequest()
+                            if let onStop {
+                                onStop()
+                            } else {
+                                SoundManager.play(.alert)
+                                session.stopRoute()
+                            }
                         } label: {
                             HStack(spacing: 5) {
                                 Image(systemName: "stop.fill")

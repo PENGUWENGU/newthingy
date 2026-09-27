@@ -174,21 +174,34 @@ struct BottomControlsView: View {
             }
 
             HStack(spacing: 8) {
-                ForEach(TravelMode.allCases) { mode in
-                    let selected = session.travelMode == mode
-                    Button {
-                        session.selectTravelMode(mode)
-                    } label: {
-                        Image(systemName: mode.icon)
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(selected ? .black : .primary)
-                            .frame(width: 44, height: 40)
-                            .background(
-                                Capsule().fill(selected ? LocusTheme.accent : Color.primary.opacity(0.08))
-                            )
-                            .contentShape(Capsule())
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(TravelMode.allCases) { mode in
+                            let selected = session.travelMode == mode
+                            Button {
+                                SoundManager.play(.toggle)
+                                session.selectTravelMode(mode)
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: mode.icon)
+                                        .font(.body.weight(.semibold))
+                                    if selected {
+                                        Text(mode.title)
+                                            .font(.caption.weight(.bold))
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .foregroundStyle(selected ? .black : .primary)
+                                .padding(.horizontal, selected ? 10 : 8)
+                                .frame(height: 40)
+                                .background(
+                                    Capsule().fill(selected ? LocusTheme.accent : Color.primary.opacity(0.08))
+                                )
+                                .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
                 Spacer(minLength: 0)
                 SpeedChip()

@@ -145,10 +145,15 @@ struct SettingsView: View {
                             Text(style.rawValue).tag(style)
                         }
                     }
+
+                    Toggle("Button Audio Feedback", isOn: Binding(
+                        get: { SoundManager.shared.isSoundEnabled },
+                        set: { SoundManager.shared.isSoundEnabled = $0 }
+                    ))
                 } header: {
-                    Text("Appearance & UI")
+                    Text("Appearance & Feedback")
                 } footer: {
-                    Text("Customize the accent color, path thickness, and liquid glass styling across Locus.")
+                    Text("Customize the accent color, path thickness, liquid glass styling, and UI sound effects.")
                 }
 
                 Section {

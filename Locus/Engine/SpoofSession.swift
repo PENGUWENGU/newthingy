@@ -254,6 +254,14 @@ final class SpoofSession: ObservableObject {
         }
     }
 
+    func skipCurrentStop() {
+        skipCurrentStopRequested = true
+    }
+
+    func skipStop() {
+        skipCurrentStop()
+    }
+
     /// Best-known real device coordinate (not the teleport pin).
     var realCoordinate: CLLocationCoordinate2D? {
         locationKeeper.lastKnownCoordinate
