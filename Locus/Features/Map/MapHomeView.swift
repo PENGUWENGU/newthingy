@@ -11,20 +11,22 @@ struct MapHomeView: View {
     @State private var searchText = ""
     @FocusState private var searchFocused: Bool
 
-    // Route Feature State (Two Methods: Points & Freehand)
-    @State private var isRouteModeActive = false
-    @State private var selectedRouteMethod: RouteMethod = .points
-    @State private var waypoints: [CLLocationCoordinate2D] = []
-    @State private var selectedWaypointIndex: Int? = nil
-    @State private var snapToRoads = true
-    @State private var drawnPath: [CLLocationCoordinate2D] = []
-    @State private var routeCoords: [CLLocationCoordinate2D] = []
+    // Route Mode State (Points & Freehand)
+    @State private var routeModeActive = false
+    @State private var routeMethod: RouteCreationMethod = .points
+    @State private var routeConnectionType: RouteConnectionType = .road
+    @State private var waypoints: [RouteWaypoint] = []
+    @State private var freehandCoordinates: [CLLocationCoordinate2D] = []
+    @State private var calculatedRoute: [CLLocationCoordinate2D] = []
     @State private var isRouting = false
+    @State private var loopRoute = false
+    @State private var selectedWaypointId: UUID?
     @State private var showRouteSheet = false
     @State private var showGPXImporter = false
+    @State private var isFreehandDragging = false
     @State private var importedGPXTrack: GPXTrack?
 
-    // Pin State
+    // Standard Pin State
     @State private var pinSelected = false
     @State private var isDraggingPin = false
     @State private var suppressNextMapTap = false
@@ -38,19 +40,15 @@ struct MapHomeView: View {
         }
     }
 
-    private var activePath: [CLLocationCoordinate2D] {
-        if !routeCoords.isEmpty { return routeCoords }
-        if selectedRouteMethod == .points && !waypoints.isEmpty {
-            return RouteBuilder.directRoute(waypoints: waypoints, sampleEvery: 10)
-        }
-        if !drawnPath.isEmpty {
-            return RouteBuilder.sample(coordinates: drawnPath, every: 10)
+    private var displayRouteCoordinates: [CLLocationCoordinate2D] {
+        if !calculatedRoute.isEmpty {
+            return calculatedRoute
+        } else if routeMethod == .freehand {
+            return freehandCoordinates
+        } else if waypoints.count >= 2 {
+            return waypoints.map(\.coordinate)
         }
         return []
-    }
-
-    private var activeDistance: CLLocationDistance {
-        RouteBuilder.totalDistance(coordinates: activePath)
     }
 
     var body: some View {
@@ -60,8 +58,8 @@ struct MapHomeView: View {
                     Map(position: $position) {
                         UserAnnotation()
 
-                        // Single dropped pin for teleport
-                        if let pin = session.pin, !isRouteModeActive {
+                        // Single dropped pin (when not in route mode or when placing pins)
+                        if let pin = session.pin, !routeModeActive {
                             Annotation("", coordinate: pin, anchor: .bottom) {
                                 MapDropPin(
                                     selected: pinSelected,
@@ -107,7 +105,26 @@ struct MapHomeView: View {
                             }
                         }
 
-                        // Spoofed Location Marker
+                        // Waypoint Annotations (Points method)
+                        if routeModeActive && routeMethod == .points {
+                            ForEach(Array(waypoints.enumerated()), id: \.element.id) { index, wp in
+                                Annotation("", coordinate: wp.coordinate, anchor: .center) {
+                                    WaypointPinView(
+                                        index: index,
+                                        total: waypoints.count,
+                                        isSelected: selectedWaypointId == wp.id,
+                                        onSelect: {
+                                            selectedWaypointId = (selectedWaypointId == wp.id) ? nil : wp.id
+                                        },
+                                        onRemove: {
+                                            removeWaypoint(at: index)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Simulated Spoof Puck
                         if let sim = session.simulated {
                             Annotation("Spoof", coordinate: sim) {
                                 ZStack {
@@ -118,50 +135,26 @@ struct MapHomeView: View {
                             }
                         }
 
-                        // Route Mode: Points Method Waypoint Markers
-                        if isRouteModeActive && selectedRouteMethod == .points {
-                            ForEach(Array(waypoints.enumerated()), id: \.offset) { index, coord in
-                                Annotation("", coordinate: coord, anchor: .center) {
-                                    WaypointMarkerView(
-                                        index: index,
-                                        totalCount: waypoints.count,
-                                        coordinate: coord,
-                                        isSelected: selectedWaypointIndex == index,
-                                        onSelect: {
-                                            withAnimation {
-                                                selectedWaypointIndex = (selectedWaypointIndex == index ? nil : index)
-                                            }
-                                        },
-                                        onRemove: {
-                                            withAnimation {
-                                                waypoints.remove(at: index)
-                                                selectedWaypointIndex = nil
-                                                if snapToRoads {
-                                                    recalculatePointsRoute()
-                                                }
-                                            }
-                                        }
+                        // Calculated / Main Route Polyline
+                        if displayRouteCoordinates.count > 1 {
+                            MapPolyline(coordinates: displayRouteCoordinates)
+                                .stroke(
+                                    routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
+                                    style: StrokeStyle(
+                                        lineWidth: 5,
+                                        lineCap: .round,
+                                        lineJoin: .round
                                     )
-                                }
-                            }
+                                )
                         }
 
-                        // Calculated Road Route Polyline
-                        if routeCoords.count > 1 {
-                            MapPolyline(coordinates: routeCoords)
-                                .stroke(LocusTheme.accent, lineWidth: 5)
-                        }
-
-                        // Points Direct Segments Preview (when not snapped or calculating)
-                        if isRouteModeActive && selectedRouteMethod == .points && waypoints.count > 1 && (routeCoords.isEmpty || !snapToRoads) {
-                            MapPolyline(coordinates: waypoints)
-                                .stroke(LocusTheme.accent.opacity(0.85), style: StrokeStyle(lineWidth: 3.5, dash: [8, 5]))
-                        }
-
-                        // Freehand Drawn Path Polyline
-                        if drawnPath.count > 1 {
-                            MapPolyline(coordinates: drawnPath)
-                                .stroke(LocusTheme.accentSecondary, style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round))
+                        // Freehand active drawing trail
+                        if routeModeActive && routeMethod == .freehand && freehandCoordinates.count > 1 && calculatedRoute.isEmpty {
+                            MapPolyline(coordinates: freehandCoordinates)
+                                .stroke(
+                                    LocusTheme.accentSecondary,
+                                    style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [4, 4])
+                                )
                         }
                     }
                     .mapStyle(mapStyle)
@@ -169,28 +162,21 @@ struct MapHomeView: View {
                     .onTapGesture { point in
                         searchFocused = false
                         guard !suppressNextMapTap, !isDraggingPin else { return }
-                        pinSelected = false
-                        selectedWaypointIndex = nil
                         handleMapTap(at: point, proxy: proxy)
                     }
 
-                    // Freehand Drag Gesture Capture Overlay
-                    if isRouteModeActive && selectedRouteMethod == .freehand {
-                        GeometryReader { _ in
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .gesture(
-                                    DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                                        .onChanged { value in
-                                            if let coord = proxy.convert(value.location, from: .local) {
-                                                handleFreehandDrag(coord: coord)
-                                            }
-                                        }
-                                        .onEnded { _ in
-                                            handleFreehandEnd()
-                                        }
-                                )
-                        }
+                    // Freehand Drawing Drag Gesture Capture Layer
+                    if routeModeActive && routeMethod == .freehand {
+                        Color.black.opacity(0.001)
+                            .gesture(
+                                DragGesture(minimumDistance: 1, coordinateSpace: .local)
+                                    .onChanged { value in
+                                        handleFreehandDrag(at: value.location, proxy: proxy)
+                                    }
+                                    .onEnded { _ in
+                                        handleFreehandDragEnd()
+                                    }
+                            )
                     }
                 }
             }
@@ -219,245 +205,316 @@ struct MapHomeView: View {
         }
         .sheet(isPresented: $showRouteSheet) {
             RoutePlannerSheet(
-                selectedMethod: $selectedRouteMethod,
+                method: $routeMethod,
+                connectionType: $routeConnectionType,
                 waypoints: $waypoints,
-                snapToRoads: $snapToRoads,
-                routeCoords: $routeCoords,
-                drawnPath: $drawnPath,
+                freehandCoordinates: $freehandCoordinates,
+                calculatedRoute: $calculatedRoute,
                 isRouting: $isRouting,
-                onBuildRoadRoute: recalculatePointsRoute,
-                onBuildDirectRoute: buildDirectPointsRoute,
-                onReverseRoute: reverseActiveRoute,
-                onLoopRoute: loopActiveRoute,
-                onPlay: playRoute,
+                loopRoute: $loopRoute,
+                onBuildRoute: buildPointsRoute,
+                onPlayRoute: playRoute,
+                onStopRoute: { session.stopRoute() },
                 onImportGPX: { showGPXImporter = true },
                 onExportGPX: exportGPX,
-                onClearAll: clearAllRouteData
+                onSmoothFreehand: smoothFreehandRoute,
+                onClearRoute: clearAllRouteData,
+                onAddPinAsWaypoint: addPinAsWaypoint,
+                onAddSpoofAsWaypoint: addSpoofAsWaypoint
             )
             .presentationDetents([.medium, .large])
         }
     }
 
-    // MARK: - Map Interactions
+    // MARK: - Map Tap & Gestures
+
     private func handleMapTap(at point: CGPoint, proxy: MapProxy) {
         guard let coord = proxy.convert(point, from: .local) else { return }
 
-        if isRouteModeActive {
-            if selectedRouteMethod == .points {
-                importedGPXTrack = nil
-                waypoints.append(coord)
-                if snapToRoads && waypoints.count >= 2 {
-                    recalculatePointsRoute()
-                }
+        if routeModeActive {
+            if routeMethod == .points {
+                addWaypoint(coord)
             }
         } else {
+            pinSelected = false
             session.pin = coord
             pinPlaceName = nil
-            pinSelected = false
         }
     }
 
-    private func handleFreehandDrag(coord: CLLocationCoordinate2D) {
-        importedGPXTrack = nil
-        routeCoords.removeAll()
+    private func handleFreehandDrag(at point: CGPoint, proxy: MapProxy) {
+        guard let coord = proxy.convert(point, from: .local) else { return }
+        if !isFreehandDragging {
+            isFreehandDragging = true
+            importedGPXTrack = nil
+        }
 
-        if let last = drawnPath.last {
+        // Add coordinate if sufficiently distant from last point
+        if let last = freehandCoordinates.last {
             let dist = CLLocation(latitude: last.latitude, longitude: last.longitude)
                 .distance(from: CLLocation(latitude: coord.latitude, longitude: coord.longitude))
-            if dist >= 2.5 { // Only add if 2.5 meters away to keep line smooth & fluid
-                drawnPath.append(coord)
+            if dist >= 2.0 {
+                freehandCoordinates.append(coord)
             }
         } else {
-            drawnPath.append(coord)
+            freehandCoordinates.append(coord)
         }
     }
 
-    private func handleFreehandEnd() {
-        if drawnPath.count > 1 {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    private func handleFreehandDragEnd() {
+        isFreehandDragging = false
+        if freehandCoordinates.count >= 2 {
+            smoothFreehandRoute()
         }
     }
 
-    // MARK: - Chrome & UI Components
+    // MARK: - Route Operations
+
+    private func addWaypoint(_ coord: CLLocationCoordinate2D) {
+        let name = "Waypoint \(waypoints.count + 1)"
+        waypoints.append(RouteWaypoint(coordinate: coord, name: name))
+        importedGPXTrack = nil
+        if waypoints.count >= 2 {
+            if routeConnectionType == .straight {
+                calculatedRoute = RouteBuilder.multiPointStraightRoute(waypoints: waypoints.map(\.coordinate))
+            } else {
+                buildPointsRoute()
+            }
+        }
+    }
+
+    private func removeWaypoint(at index: Int) {
+        guard index < waypoints.count else { return }
+        waypoints.remove(at: index)
+        selectedWaypointId = nil
+        if waypoints.count >= 2 {
+            if routeConnectionType == .straight {
+                calculatedRoute = RouteBuilder.multiPointStraightRoute(waypoints: waypoints.map(\.coordinate))
+            } else {
+                buildPointsRoute()
+            }
+        } else {
+            calculatedRoute.removeAll()
+        }
+    }
+
+    private func addPinAsWaypoint() {
+        guard let pin = session.pin else { return }
+        addWaypoint(pin)
+    }
+
+    private func addSpoofAsWaypoint() {
+        guard let sim = session.simulated else { return }
+        addWaypoint(sim)
+    }
+
+    private func buildPointsRoute() {
+        guard waypoints.count >= 2 else { return }
+        if routeConnectionType == .straight {
+            calculatedRoute = RouteBuilder.multiPointStraightRoute(waypoints: waypoints.map(\.coordinate))
+            return
+        }
+
+        isRouting = true
+        let coords = waypoints.map(\.coordinate)
+        Task {
+            do {
+                let route = try await RouteBuilder.multiPointRoadRoute(waypoints: coords, mode: session.travelMode)
+                await MainActor.run {
+                    self.calculatedRoute = route
+                    self.isRouting = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.isRouting = false
+                    // Fallback to straight line if roads unavailable in region
+                    self.calculatedRoute = RouteBuilder.multiPointStraightRoute(waypoints: coords)
+                    self.session.lastError = "Road route unavailable; connected with straight segments."
+                }
+            }
+        }
+    }
+
+    private func smoothFreehandRoute() {
+        guard freehandCoordinates.count >= 2 else { return }
+        calculatedRoute = RouteBuilder.processFreehandPath(coordinates: freehandCoordinates, sampleMeters: 6, smooth: true)
+    }
+
+    private func clearAllRouteData() {
+        waypoints.removeAll()
+        freehandCoordinates.removeAll()
+        calculatedRoute.removeAll()
+        selectedWaypointId = nil
+        importedGPXTrack = nil
+    }
+
+    private func playRoute() {
+        let path = displayRouteCoordinates
+        guard path.count >= 2 else {
+            session.lastError = "Add at least 2 points or draw a freehand path first."
+            return
+        }
+        session.followRoute(path, pairing: pairing, loop: loopRoute)
+    }
+
+    // MARK: - UI Components
+
     private var topChrome: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             StatusBarView()
 
-            if isRouteModeActive {
-                routeCreationHUD
-            } else {
-                searchBar
+            searchBar
 
-                if !searchText.isEmpty && !search.results.isEmpty {
-                    searchResults
-                }
+            if !searchText.isEmpty && !search.results.isEmpty {
+                searchResults
+            }
 
-                HStack(alignment: .center, spacing: 10) {
-                    mapChromeButtons
-                    Spacer(minLength: 0)
-                    locateButton
-                }
+            // Route Mode Active Floating Bar
+            if routeModeActive {
+                routeControlPanel
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            HStack(alignment: .center, spacing: 10) {
+                mapChromeButtons
+                Spacer(minLength: 0)
+                locateButton
             }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 2)
         .safeAreaPadding(.top, 8)
-        .animation(.easeInOut(duration: 0.22), value: isRouteModeActive)
+        .animation(.spring(response: 0.32, dampingFraction: 0.8), value: routeModeActive)
     }
 
-    // MARK: - Route Creation HUD
-    private var routeCreationHUD: some View {
+    private var routeControlPanel: some View {
         VStack(spacing: 8) {
-            // Method Switcher & Done bar
+            // Method Switcher: Points vs Freehand
             HStack(spacing: 8) {
-                Picker("Method", selection: $selectedRouteMethod) {
-                    ForEach(RouteMethod.allCases) { method in
-                        Text(method.rawValue).tag(method)
+                Button {
+                    withAnimation { routeMethod = .points }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "mappin.and.ellipse")
+                        Text("Points")
                     }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(routeMethod == .points ? .black : .primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule().fill(routeMethod == .points ? LocusTheme.accent : Color.primary.opacity(0.08))
+                    )
                 }
-                .pickerStyle(.segmented)
+                .buttonStyle(.plain)
+
+                Button {
+                    withAnimation { routeMethod = .freehand }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "pencil.tip.crop.circle")
+                        Text("Freehand")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(routeMethod == .freehand ? .black : .primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule().fill(routeMethod == .freehand ? LocusTheme.accentSecondary : Color.primary.opacity(0.08))
+                    )
+                }
+                .buttonStyle(.plain)
 
                 Button {
                     withAnimation {
-                        isRouteModeActive = false
+                        routeModeActive = false
                     }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(.secondary)
+                        .frame(width: 36, height: 36)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Close route mode")
             }
 
-            // Stats Chip & Actions Row
+            // Quick Info & Action Row
             HStack(spacing: 8) {
-                // Info readout
-                HStack(spacing: 6) {
-                    Image(systemName: selectedRouteMethod.icon)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(selectedRouteMethod == .points ? LocusTheme.accent : LocusTheme.accentSecondary)
-
-                    if selectedRouteMethod == .points {
-                        Text("\(waypoints.count) pts")
-                            .font(.caption.monospaced().weight(.semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    if routeMethod == .points {
+                        Text(waypoints.isEmpty ? "Tap map to add points" : "\(waypoints.count) Points • \(RouteBuilder.formattedDistance(RouteBuilder.totalDistance(of: displayRouteCoordinates)))")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
                     } else {
-                        Text("\(drawnPath.count) pts")
-                            .font(.caption.monospaced().weight(.semibold))
-                    }
-
-                    if activeDistance > 0 {
-                        Text("•")
-                            .foregroundStyle(.secondary)
-                        Text(RouteBuilder.formattedDistance(activeDistance))
-                            .font(.caption.monospaced().weight(.semibold))
+                        Text(freehandCoordinates.isEmpty ? "Drag finger on map to draw" : "Drawn Path • \(RouteBuilder.formattedDistance(RouteBuilder.totalDistance(of: displayRouteCoordinates)))")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(Capsule().fill(Color.primary.opacity(0.08)))
 
-                Spacer(minLength: 0)
+                Spacer()
 
-                // Contextual Action Buttons
-                if selectedRouteMethod == .points {
-                    // Snap to road toggle
+                if routeMethod == .points && !waypoints.isEmpty {
                     Button {
-                        snapToRoads.toggle()
-                        if snapToRoads && waypoints.count >= 2 {
-                            recalculatePointsRoute()
-                        } else if !snapToRoads {
-                            routeCoords.removeAll()
+                        waypoints.removeLast()
+                        if waypoints.count >= 2 {
+                            buildPointsRoute()
+                        } else {
+                            calculatedRoute.removeAll()
                         }
                     } label: {
-                        Image(systemName: snapToRoads ? "road.lanes" : "ruler")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(snapToRoads ? LocusTheme.accent : .secondary)
-                            .frame(width: 36, height: 36)
-                            .background(Circle().fill(Color.primary.opacity(0.08)))
+                        Image(systemName: "arrow.uturn.backward.circle.fill")
+                            .font(.body)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(snapToRoads ? "Snap to roads ON" : "Direct lines ON")
+                    .foregroundStyle(.secondary)
+                }
 
-                    // Add current pin/spoof as waypoint
+                if routeMethod == .freehand && !freehandCoordinates.isEmpty {
                     Button {
-                        if let sim = session.simulated {
-                            waypoints.append(sim)
-                        } else if let pin = session.pin {
-                            waypoints.append(pin)
-                        }
-                        if snapToRoads && waypoints.count >= 2 {
-                            recalculatePointsRoute()
-                        }
+                        clearAllRouteData()
                     } label: {
-                        Image(systemName: "plus.circle")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(width: 36, height: 36)
-                            .background(Circle().fill(Color.primary.opacity(0.08)))
+                        Image(systemName: "trash.circle.fill")
+                            .font(.body)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Add current position to waypoints")
+                    .foregroundStyle(.secondary)
                 }
 
-                // Undo Button
-                Button {
-                    undoLastRoutePoint()
-                } label: {
-                    Image(systemName: "arrow.uturn.backward")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(width: 36, height: 36)
-                        .background(Circle().fill(Color.primary.opacity(0.08)))
-                }
-                .buttonStyle(.plain)
-                .disabled(selectedRouteMethod == .points ? waypoints.isEmpty : drawnPath.isEmpty)
-                .accessibilityLabel("Undo last point")
-
-                // Loop route
-                Button {
-                    loopActiveRoute()
-                } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(width: 36, height: 36)
-                        .background(Circle().fill(Color.primary.opacity(0.08)))
-                }
-                .buttonStyle(.plain)
-                .disabled(selectedRouteMethod == .points ? waypoints.count < 2 : drawnPath.count < 3)
-                .accessibilityLabel("Loop to start")
-
-                // Open full sheet
                 Button {
                     showRouteSheet = true
                 } label: {
-                    Image(systemName: "list.bullet")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(width: 36, height: 36)
-                        .background(Circle().fill(Color.primary.opacity(0.08)))
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.body.weight(.semibold))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Route details")
+                .foregroundStyle(LocusTheme.accent)
 
-                // Play / Follow Button
-                Button {
-                    playRoute()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "play.fill")
-                        Text("Follow")
+                if displayRouteCoordinates.count >= 2 {
+                    Button {
+                        if session.isFollowingRoute {
+                            session.stopRoute()
+                        } else {
+                            playRoute()
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: session.isFollowingRoute ? "stop.fill" : "play.fill")
+                            Text(session.isFollowingRoute ? "Stop" : "Follow")
+                                .font(.caption.weight(.bold))
+                        }
+                        .foregroundStyle(session.isFollowingRoute ? .white : .black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(session.isFollowingRoute ? LocusTheme.danger : LocusTheme.statusGood))
                     }
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Capsule().fill(activePath.count >= 2 ? LocusTheme.accent : Color.gray.opacity(0.4)))
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-                .disabled(activePath.count < 2)
             }
         }
         .padding(12)
-        .locusGlass(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .locusGlass(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var searchBar: some View {
@@ -531,26 +588,13 @@ struct MapHomeView: View {
                 session.mapStyleIndex = (session.mapStyleIndex + 1) % 3
             }
 
-            // Route Feature Button (Points & Freehand)
-            chromeIconButton(isRouteModeActive ? "point.topleft.down.to.point.bottomright.curvepath.fill" : "point.topleft.down.to.point.bottomright.curvepath") {
+            // Route Feature Button
+            chromeIconButton("point.topleft.down.to.point.bottomright.curvepath") {
                 withAnimation {
-                    isRouteModeActive.toggle()
+                    routeModeActive.toggle()
                 }
             }
-            .foregroundStyle(isRouteModeActive ? LocusTheme.accent : .primary)
-
-            // Direct Freehand Draw toggle
-            chromeIconButton(isRouteModeActive && selectedRouteMethod == .freehand ? "pencil.tip.crop.circle.badge.minus" : "pencil.tip.crop.circle") {
-                withAnimation {
-                    if isRouteModeActive && selectedRouteMethod == .freehand {
-                        isRouteModeActive = false
-                    } else {
-                        isRouteModeActive = true
-                        selectedRouteMethod = .freehand
-                    }
-                }
-            }
-            .foregroundStyle(isRouteModeActive && selectedRouteMethod == .freehand ? LocusTheme.accentSecondary : .primary)
+            .foregroundStyle(routeModeActive ? LocusTheme.accent : .primary)
 
             if session.pin != nil {
                 chromeIconButton("star.circle") {
@@ -630,134 +674,32 @@ struct MapHomeView: View {
                 let coord = item.placemark.coordinate
                 let title = item.name ?? completion.title
                 await MainActor.run {
-                    if isRouteModeActive && selectedRouteMethod == .points {
-                        waypoints.append(coord)
-                        if snapToRoads && waypoints.count >= 2 {
-                            recalculatePointsRoute()
+                    if routeModeActive && routeMethod == .points {
+                        waypoints.append(RouteWaypoint(coordinate: coord, name: title))
+                        if waypoints.count >= 2 {
+                            buildPointsRoute()
                         }
                     } else {
                         session.pin = coord
                         pinPlaceName = title
-                        session.addFavorite(name: title, coordinate: coord)
-                        session.pushNamedRecent(name: title, coordinate: coord)
                     }
                     position = .region(MKCoordinateRegion(center: coord, latitudinalMeters: 1200, longitudinalMeters: 1200))
                     searchText = ""
                     search.query = ""
                     searchFocused = false
+                    session.addFavorite(name: title, coordinate: coord)
+                    session.pushNamedRecent(name: title, coordinate: coord)
                 }
             }
         }
-    }
-
-    // MARK: - Route Calculations
-    private func recalculatePointsRoute() {
-        guard waypoints.count >= 2 else {
-            routeCoords.removeAll()
-            return
-        }
-        isRouting = true
-        Task {
-            do {
-                let coords = try await RouteBuilder.roadRoute(waypoints: waypoints, mode: session.travelMode)
-                await MainActor.run {
-                    importedGPXTrack = nil
-                    routeCoords = coords
-                    isRouting = false
-                }
-            } catch {
-                await MainActor.run {
-                    isRouting = false
-                    // Fallback to direct connection if road calculation fails for some segments
-                    routeCoords = RouteBuilder.directRoute(waypoints: waypoints, sampleEvery: 10)
-                }
-            }
-        }
-    }
-
-    private func buildDirectPointsRoute() {
-        guard waypoints.count >= 2 else { return }
-        routeCoords = RouteBuilder.directRoute(waypoints: waypoints, sampleEvery: 10)
-    }
-
-    private func undoLastRoutePoint() {
-        withAnimation {
-            if selectedRouteMethod == .points {
-                if !waypoints.isEmpty {
-                    waypoints.removeLast()
-                    if snapToRoads && waypoints.count >= 2 {
-                        recalculatePointsRoute()
-                    } else if waypoints.count < 2 {
-                        routeCoords.removeAll()
-                    }
-                }
-            } else {
-                if drawnPath.count > 10 {
-                    drawnPath.removeLast(min(15, drawnPath.count))
-                } else {
-                    drawnPath.removeAll()
-                }
-            }
-        }
-    }
-
-    private func reverseActiveRoute() {
-        withAnimation {
-            if selectedRouteMethod == .points {
-                waypoints.reverse()
-                if snapToRoads && waypoints.count >= 2 {
-                    recalculatePointsRoute()
-                } else if !routeCoords.isEmpty {
-                    routeCoords.reverse()
-                }
-            } else {
-                drawnPath.reverse()
-            }
-        }
-    }
-
-    private func loopActiveRoute() {
-        withAnimation {
-            if selectedRouteMethod == .points, let first = waypoints.first, waypoints.count >= 2 {
-                waypoints.append(first)
-                if snapToRoads {
-                    recalculatePointsRoute()
-                }
-            } else if selectedRouteMethod == .freehand, let first = drawnPath.first, drawnPath.count >= 3 {
-                drawnPath.append(first)
-            }
-        }
-    }
-
-    private func clearAllRouteData() {
-        withAnimation {
-            waypoints.removeAll()
-            drawnPath.removeAll()
-            routeCoords.removeAll()
-            importedGPXTrack = nil
-            selectedWaypointIndex = nil
-        }
-    }
-
-    private func playRoute() {
-        let path = activePath
-        guard path.count >= 2 else {
-            session.lastError = "Create a route with Points or Freehand first."
-            return
-        }
-        showRouteSheet = false
-        session.followRoute(path, pairing: pairing)
     }
 
     private func importGPX(_ url: URL) {
         do {
             let track = try GPXCodec.parseTrack(url)
             importedGPXTrack = track
-            let sampled = RouteBuilder.sample(coordinates: track.coordinates, every: 10)
-            routeCoords = sampled
-            waypoints = track.coordinates
-            isRouteModeActive = true
-            selectedRouteMethod = .points
+            calculatedRoute = RouteBuilder.sample(coordinates: track.coordinates, every: 10)
+            routeModeActive = true
             if let first = track.coordinates.first {
                 session.pin = first
                 position = .region(MKCoordinateRegion(center: first, latitudinalMeters: 2000, longitudinalMeters: 2000))
@@ -772,7 +714,7 @@ struct MapHomeView: View {
         if let track = importedGPXTrack, !track.isEmpty {
             gpx = GPXCodec.export(track)
         } else {
-            let path = activePath
+            let path = displayRouteCoordinates
             guard !path.isEmpty else {
                 session.lastError = "Nothing to export."
                 return

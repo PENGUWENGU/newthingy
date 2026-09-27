@@ -2,315 +2,357 @@ import CoreLocation
 import SwiftUI
 
 struct RoutePlannerSheet: View {
-    @Binding var selectedMethod: RouteMethod
-    @Binding var waypoints: [CLLocationCoordinate2D]
-    @Binding var snapToRoads: Bool
-    @Binding var routeCoords: [CLLocationCoordinate2D]
-    @Binding var drawnPath: [CLLocationCoordinate2D]
+    @Binding var method: RouteCreationMethod
+    @Binding var connectionType: RouteConnectionType
+    @Binding var waypoints: [RouteWaypoint]
+    @Binding var freehandCoordinates: [CLLocationCoordinate2D]
+    @Binding var calculatedRoute: [CLLocationCoordinate2D]
     @Binding var isRouting: Bool
+    @Binding var loopRoute: Bool
 
-    var onBuildRoadRoute: () -> Void
-    var onBuildDirectRoute: () -> Void
-    var onReverseRoute: () -> Void
-    var onLoopRoute: () -> Void
-    var onPlay: () -> Void
+    var onBuildRoute: () -> Void
+    var onPlayRoute: () -> Void
+    var onStopRoute: () -> Void
     var onImportGPX: () -> Void
     var onExportGPX: () -> Void
-    var onClearAll: () -> Void
+    var onSmoothFreehand: () -> Void
+    var onClearRoute: () -> Void
+    var onAddPinAsWaypoint: () -> Void
+    var onAddSpoofAsWaypoint: () -> Void
 
     @EnvironmentObject private var session: SpoofSession
     @Environment(\.dismiss) private var dismiss
+    @State private var editingWaypoint: RouteWaypoint?
+    @State private var editNameText = ""
 
     private var activePath: [CLLocationCoordinate2D] {
-        if !routeCoords.isEmpty { return routeCoords }
-        if !drawnPath.isEmpty { return drawnPath }
-        return []
+        if !calculatedRoute.isEmpty {
+            return calculatedRoute
+        } else if method == .freehand {
+            return freehandCoordinates
+        } else {
+            return waypoints.map(\.coordinate)
+        }
     }
 
     private var totalDistance: CLLocationDistance {
-        RouteBuilder.totalDistance(coordinates: activePath)
+        RouteBuilder.totalDistance(of: activePath)
     }
 
-    private var estimatedDurationText: String {
-        RouteBuilder.formattedDuration(distance: totalDistance, speedMPS: session.currentSpeedMPS)
+    private var estimatedDuration: TimeInterval {
+        RouteBuilder.estimatedDuration(distance: totalDistance, speed: session.currentSpeedMPS)
     }
 
     var body: some View {
         NavigationStack {
             List {
-                // Method Switcher Section
+                // Method Switcher: Points vs Freehand
                 Section {
-                    Picker("Route Method", selection: $selectedMethod) {
-                        ForEach(RouteMethod.allCases) { method in
-                            Label(method.rawValue, systemImage: method.icon)
-                                .tag(method)
+                    Picker("Route Method", selection: $method) {
+                        ForEach(RouteCreationMethod.allCases) { m in
+                            Label(m.rawValue, systemImage: m.icon).tag(m)
                         }
                     }
                     .pickerStyle(.segmented)
                     .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-
-                    Text(selectedMethod.description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    .listRowBackground(Color.clear)
                 }
 
-                // Summary Stats Section if we have route data
-                if !activePath.isEmpty {
-                    Section("Route Statistics") {
-                        HStack {
-                            Label("Distance", systemImage: "point.bottomleft.forward.to.point.topright.scurvepath")
-                            Spacer()
-                            Text(RouteBuilder.formattedDistance(totalDistance))
-                                .font(.subheadline.monospaced().weight(.semibold))
+                // MARK: - Method 1: Points
+                if method == .points {
+                    Section("Connection Type") {
+                        Picker("Routing", selection: $connectionType) {
+                            ForEach(RouteConnectionType.allCases) { type in
+                                Label(type.rawValue, systemImage: type.icon).tag(type)
+                            }
                         }
-                        HStack {
-                            Label("Est. Duration", systemImage: "clock")
+                        .pickerStyle(.segmented)
+                    }
+
+                    Section {
+                        HStack(spacing: 12) {
+                            Button {
+                                onAddPinAsWaypoint()
+                            } label: {
+                                Label("Add Pin", systemImage: "mappin.circle.fill")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(session.pin == nil)
+
+                            Button {
+                                onAddSpoofAsWaypoint()
+                            } label: {
+                                Label("Add Spoof", systemImage: "location.circle.fill")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(session.simulated == nil)
+
                             Spacer()
-                            Text(estimatedDurationText)
-                                .font(.subheadline.monospaced().weight(.semibold))
+
+                            if !waypoints.isEmpty {
+                                Button("Clear", role: .destructive) {
+                                    waypoints.removeAll()
+                                    calculatedRoute.removeAll()
+                                }
+                                .font(.subheadline)
+                            }
                         }
-                        HStack {
-                            Label("Points Count", systemImage: "circle.grid.cross")
-                            Spacer()
-                            Text("\(activePath.count) points")
-                                .font(.subheadline.monospaced())
+                    } header: {
+                        Text("Add Waypoints")
+                    } footer: {
+                        Text("You can also tap anywhere on the map in Points mode to add waypoints.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Section("Waypoints (\(waypoints.count))") {
+                        if waypoints.isEmpty {
+                            Text("No waypoints added yet. Tap on the map or use the buttons above.")
+                                .font(.footnote)
                                 .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(Array(waypoints.enumerated()), id: \.element.id) { index, wp in
+                                HStack(spacing: 10) {
+                                    Circle()
+                                        .fill(badgeColor(for: index, total: waypoints.count))
+                                        .frame(width: 24, height: 24)
+                                        .overlay(
+                                            Text("\(index + 1)")
+                                                .font(.system(size: 11, weight: .bold))
+                                                .foregroundStyle(.black)
+                                        )
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(wp.name.isEmpty ? (index == 0 ? "Start Point" : (index == waypoints.count - 1 ? "End Point" : "Waypoint \(index + 1)")) : wp.name)
+                                            .font(.subheadline.weight(.medium))
+                                        Text(String(format: "%.5f, %.5f", wp.coordinate.latitude, wp.coordinate.longitude))
+                                            .font(.caption2.monospaced())
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer()
+                                }
+                            }
+                            .onMove { indices, newOffset in
+                                waypoints.move(fromOffsets: indices, toOffset: newOffset)
+                                calculatedRoute.removeAll()
+                            }
+                            .onDelete { indices in
+                                waypoints.remove(atOffsets: indices)
+                                calculatedRoute.removeAll()
+                            }
+
+                            if waypoints.count >= 2 {
+                                HStack {
+                                    Button {
+                                        waypoints.reverse()
+                                        calculatedRoute.removeAll()
+                                    } label: {
+                                        Label("Reverse", systemImage: "arrow.up.arrow.down")
+                                            .font(.footnote)
+                                    }
+
+                                    Spacer()
+
+                                    Button {
+                                        if let first = waypoints.first, waypoints.last != first {
+                                            waypoints.append(RouteWaypoint(coordinate: first.coordinate, name: "Return to Start"))
+                                            calculatedRoute.removeAll()
+                                        }
+                                    } label: {
+                                        Label("Loop to Start", systemImage: "arrow.triangle.2.circlepath")
+                                            .font(.footnote)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Section {
+                        Button {
+                            onBuildRoute()
+                        } label: {
+                            HStack {
+                                Spacer()
+                                if isRouting {
+                                    ProgressView()
+                                        .tint(.white)
+                                } else {
+                                    Label(
+                                        connectionType == .road ? "Calculate Road Route" : "Build Straight Route",
+                                        systemImage: connectionType == .road ? "road.lanes" : "line.diagonal"
+                                    )
+                                    .font(.headline)
+                                }
+                                Spacer()
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(LocusTheme.accent)
+                        .foregroundStyle(.black)
+                        .disabled(waypoints.count < 2 || isRouting)
+                    }
+                }
+
+                // MARK: - Method 2: Freehand
+                if method == .freehand {
+                    Section("Freehand Drawing") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "hand.draw.fill")
+                                    .font(.title2)
+                                    .foregroundStyle(LocusTheme.accentSecondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Continuous Touch Sketch")
+                                        .font(.subheadline.weight(.semibold))
+                                    Text("Drag your finger across the map to sketch freeform trajectories.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 4)
+
+                            HStack(spacing: 16) {
+                                LabeledContent("Raw points", value: "\(freehandCoordinates.count)")
+                                LabeledContent("Smoothed", value: "\(calculatedRoute.isEmpty ? freehandCoordinates.count : calculatedRoute.count)")
+                            }
+                            .font(.caption)
+                        }
+
+                        if !freehandCoordinates.isEmpty {
+                            HStack(spacing: 12) {
+                                Button {
+                                    onSmoothFreehand()
+                                } label: {
+                                    Label("Smooth Path", systemImage: "waveform.path")
+                                        .font(.subheadline)
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button {
+                                    if let first = freehandCoordinates.first, freehandCoordinates.last != first {
+                                        freehandCoordinates.append(first)
+                                        onSmoothFreehand()
+                                    }
+                                } label: {
+                                    Label("Close Loop", systemImage: "circle.circle")
+                                        .font(.subheadline)
+                                }
+                                .buttonStyle(.bordered)
+
+                                Spacer()
+
+                                Button("Clear", role: .destructive) {
+                                    onClearRoute()
+                                }
+                                .font(.subheadline)
+                            }
                         }
                     }
                 }
 
-                // Method Specific Section
-                if selectedMethod == .points {
-                    pointsMethodSection
-                } else {
-                    freehandMethodSection
+                // MARK: - Route Summary & Follow
+                if activePath.count >= 2 {
+                    Section("Route Overview") {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Distance")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(RouteBuilder.formattedDistance(totalDistance))
+                                    .font(.title3.weight(.bold))
+                            }
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text("Est. Duration (\(String(format: "%.1f", session.currentSpeedMPS)) m/s)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(RouteBuilder.formattedDuration(estimatedDuration))
+                                    .font(.title3.weight(.bold))
+                                    .foregroundStyle(LocusTheme.accent)
+                            }
+                        }
+                        .padding(.vertical, 4)
+
+                        Toggle(isOn: $loopRoute) {
+                            Label("Repeat route continuously (Loop)", systemImage: "repeat")
+                                .font(.subheadline)
+                        }
+
+                        if session.isFollowingRoute {
+                            VStack(spacing: 8) {
+                                ProgressView(value: session.routeProgress)
+                                    .tint(LocusTheme.accent)
+                                Button {
+                                    onStopRoute()
+                                } label: {
+                                    HStack {
+                                        Spacer()
+                                        Label("Stop Following Route", systemImage: "stop.fill")
+                                            .font(.headline)
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(LocusTheme.danger)
+                            }
+                        } else {
+                            Button {
+                                onPlayRoute()
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    Label("Follow Route", systemImage: "play.fill")
+                                        .font(.headline)
+                                    Spacer()
+                                }
+                                .padding(.vertical, 4)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(LocusTheme.statusGood)
+                            .foregroundStyle(.black)
+                        }
+                    }
                 }
 
-                // Actions Section
-                Section("Playback & File") {
-                    Button(action: {
-                        dismiss()
-                        onPlay()
-                    }) {
-                        Label("Follow Route", systemImage: "play.fill")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(activePath.count >= 2 ? LocusTheme.accent : .secondary)
-                    }
-                    .disabled(activePath.count < 2)
-
+                // MARK: - GPX Exchange
+                Section("GPX Exchange") {
                     Button(action: onImportGPX) {
                         Label("Import GPX Track", systemImage: "square.and.arrow.down")
                     }
-
                     Button(action: onExportGPX) {
                         Label("Export GPX Track", systemImage: "square.and.arrow.up")
                     }
                     .disabled(activePath.isEmpty)
-
-                    if !activePath.isEmpty || !waypoints.isEmpty || !drawnPath.isEmpty {
-                        Button(role: .destructive, action: onClearAll) {
-                            Label("Clear All Route Data", systemImage: "trash")
-                        }
-                    }
-                }
-
-                Section {
-                    Text("Routes follow Apple Maps roads & paths or custom straight lines according to the active method. Speed variations simulate natural movement.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Route Planner")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .topBarLeading) {
+                    if method == .points && !waypoints.isEmpty {
+                        EditButton()
+                    }
+                }
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
-                        .font(.body.weight(.semibold))
                 }
             }
         }
     }
 
-    // MARK: - Points Method View
-    @ViewBuilder
-    private var pointsMethodSection: some View {
-        Section("Waypoints Configuration") {
-            Toggle(isOn: $snapToRoads) {
-                Label("Snap to Roads / Paths", systemImage: "road.lanes")
-            }
-            .tint(LocusTheme.accent)
-
-            HStack(spacing: 8) {
-                Button("Add Current Spoof") {
-                    if let sim = session.simulated {
-                        waypoints.append(sim)
-                    } else if let pin = session.pin {
-                        waypoints.append(pin)
-                    }
-                }
-                .buttonStyle(.bordered)
-                .font(.caption)
-
-                if let pin = session.pin {
-                    Button("Add Pin") {
-                        waypoints.append(pin)
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption)
-                }
-            }
-
-            if waypoints.count >= 2 {
-                HStack {
-                    Button {
-                        onReverseRoute()
-                    } label: {
-                        Label("Reverse", systemImage: "arrow.left.arrow.right")
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption)
-
-                    Spacer()
-
-                    Button {
-                        onLoopRoute()
-                    } label: {
-                        Label("Loop to Start", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption)
-                }
-
-                Button {
-                    if snapToRoads {
-                        onBuildRoadRoute()
-                    } else {
-                        onBuildDirectRoute()
-                    }
-                } label: {
-                    if isRouting {
-                        HStack {
-                            ProgressView()
-                            Text("Calculating Road Route…")
-                        }
-                    } else {
-                        Label(
-                            snapToRoads ? "Calculate Road Route" : "Build Direct Point Route",
-                            systemImage: snapToRoads ? "road.lanes.curved.right" : "ruler"
-                        )
-                        .font(.body.weight(.semibold))
-                    }
-                }
-                .disabled(isRouting)
-            }
-        }
-
-        Section("Waypoints List (\(waypoints.count))") {
-            if waypoints.isEmpty {
-                Text("No waypoints added yet. Tap on the map to add waypoint pins.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(Array(waypoints.enumerated()), id: \.offset) { index, coord in
-                    HStack {
-                        ZStack {
-                            Circle()
-                                .fill(index == 0 ? LocusTheme.statusGood : (index == waypoints.count - 1 ? LocusTheme.accentSecondary : LocusTheme.accent))
-                                .frame(width: 22, height: 22)
-                            Text("\(index + 1)")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(.black)
-                        }
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(index == 0 ? "Start Point" : (index == waypoints.count - 1 ? "End Point" : "Waypoint #\(index + 1)"))
-                                .font(.subheadline.weight(.medium))
-                            Text(String(format: "%.5f, %.5f", coord.latitude, coord.longitude))
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        Button(role: .destructive) {
-                            withAnimation {
-                                waypoints.remove(at: index)
-                            }
-                        } label: {
-                            Image(systemName: "trash")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .onDelete { indexSet in
-                    waypoints.remove(atOffsets: indexSet)
-                }
-
-                if !waypoints.isEmpty {
-                    Button(role: .destructive) {
-                        waypoints.removeAll()
-                    } label: {
-                        Text("Clear All Waypoints")
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Freehand Method View
-    @ViewBuilder
-    private var freehandMethodSection: some View {
-        Section("Freehand Sketching") {
-            Text("Touch and drag your finger smoothly across the map to draw any custom route in real-time.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            if drawnPath.isEmpty {
-                HStack {
-                    Image(systemName: "hand.draw")
-                        .font(.title2)
-                        .foregroundStyle(LocusTheme.accentSecondary)
-                    Text("No freehand drawing yet. Switch to the map and drag to sketch.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 4)
-            } else {
-                HStack {
-                    Label("Drawn Coordinates", systemImage: "pencil.line")
-                    Spacer()
-                    Text("\(drawnPath.count) points")
-                        .font(.subheadline.monospaced())
-                }
-
-                HStack {
-                    Button {
-                        onLoopRoute()
-                    } label: {
-                        Label("Close Loop", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption)
-
-                    Spacer()
-
-                    Button {
-                        onReverseRoute()
-                    } label: {
-                        Label("Reverse Path", systemImage: "arrow.left.arrow.right")
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption)
-                }
-
-                Button(role: .destructive) {
-                    drawnPath.removeAll()
-                } label: {
-                    Label("Clear Freehand Sketch", systemImage: "trash")
-                }
-            }
+    private func badgeColor(for index: Int, total: Int) -> Color {
+        if index == 0 {
+            return LocusTheme.statusGood
+        } else if index == total - 1 {
+            return LocusTheme.accentSecondary
+        } else {
+            return LocusTheme.accent
         }
     }
 }

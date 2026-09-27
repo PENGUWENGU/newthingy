@@ -2,7 +2,9 @@ import CoreLocation
 import Foundation
 import MapKit
 
-enum RouteMethod: String, CaseIterable, Identifiable {
+// MARK: - Route Creation Method
+
+enum RouteCreationMethod: String, CaseIterable, Identifiable {
     case points = "Points"
     case freehand = "Freehand"
 
@@ -10,25 +12,52 @@ enum RouteMethod: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .points: return "point.topleft.down.to.point.bottomright.curvepath"
-        case .freehand: return "pencil.and.outline"
+        case .points: return "mappin.and.ellipse"
+        case .freehand: return "pencil.tip.crop.circle"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .points: return "Points Route"
+        case .freehand: return "Freehand Route"
         }
     }
 
     var description: String {
         switch self {
-        case .points: return "Tap map to add waypoints, snap to roads or direct lines"
-        case .freehand: return "Drag finger smoothly across map to sketch custom route"
+        case .points:
+            return "Place sequential waypoints on the map to build road or direct paths."
+        case .freehand:
+            return "Draw any custom trajectory by dragging your finger freely across the map."
         }
     }
 }
 
-struct RouteWaypoint: Identifiable, Equatable {
+// MARK: - Points Connection Type
+
+enum RouteConnectionType: String, CaseIterable, Identifiable {
+    case road = "Roads"
+    case straight = "Straight"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .road: return "road.lanes"
+        case .straight: return "line.diagonal"
+        }
+    }
+}
+
+// MARK: - Route Waypoint Model
+
+struct RouteWaypoint: Identifiable, Equatable, Hashable {
     let id: UUID
     var coordinate: CLLocationCoordinate2D
-    var name: String?
+    var name: String
 
-    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, name: String? = nil) {
+    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, name: String = "") {
         self.id = id
         self.coordinate = coordinate
         self.name = name
@@ -40,9 +69,20 @@ struct RouteWaypoint: Identifiable, Equatable {
         lhs.coordinate.longitude == rhs.coordinate.longitude &&
         lhs.name == rhs.name
     }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(coordinate.latitude)
+        hasher.combine(coordinate.longitude)
+        hasher.combine(name)
+    }
 }
 
+// MARK: - Route Builder Engine
+
 enum RouteBuilder {
+    // MARK: - Road Route (2 Points)
+
     static func roadRoute(
         from start: CLLocationCoordinate2D,
         to end: CLLocationCoordinate2D,
@@ -57,68 +97,108 @@ enum RouteBuilder {
         let directions = MKDirections(request: request)
         let response = try await directions.calculate()
         guard let route = response.routes.first else {
-            throw NSError(domain: "Locus", code: 1, userInfo: [NSLocalizedDescriptionKey: "No route found between points"])
+            throw NSError(domain: "Locus", code: 1, userInfo: [NSLocalizedDescriptionKey: "No road route found between points."])
         }
         return sample(polyline: route.polyline, every: 12)
     }
 
-    static func roadRoute(
+    // MARK: - Multi-Point Road Route (Points Method)
+
+    static func multiPointRoadRoute(
         waypoints: [CLLocationCoordinate2D],
         mode: TravelMode
     ) async throws -> [CLLocationCoordinate2D] {
         guard waypoints.count >= 2 else { return waypoints }
-        var combined: [CLLocationCoordinate2D] = []
+        if waypoints.count == 2 {
+            return try await roadRoute(from: waypoints[0], to: waypoints[1], mode: mode)
+        }
 
+        var fullRoute: [CLLocationCoordinate2D] = []
         for i in 0..<(waypoints.count - 1) {
-            let leg = try await roadRoute(from: waypoints[i], to: waypoints[i + 1], mode: mode)
-            if combined.isEmpty {
-                combined.append(contentsOf: leg)
+            let start = waypoints[i]
+            let end = waypoints[i + 1]
+            let leg = try await roadRoute(from: start, to: end, mode: mode)
+            if fullRoute.isEmpty {
+                fullRoute.append(contentsOf: leg)
             } else {
-                combined.append(contentsOf: leg.dropFirst())
+                // Drop duplicate connecting point
+                fullRoute.append(contentsOf: leg.dropFirst())
             }
         }
-        return combined
+        return fullRoute
     }
 
-    static func directRoute(
+    // MARK: - Multi-Point Straight Route (Points Method)
+
+    static func multiPointStraightRoute(
         waypoints: [CLLocationCoordinate2D],
-        sampleEvery: CLLocationDistance = 10
+        every meters: CLLocationDistance = 8
     ) -> [CLLocationCoordinate2D] {
-        sample(coordinates: waypoints, every: sampleEvery)
+        guard waypoints.count >= 2 else { return waypoints }
+        return sample(coordinates: waypoints, every: meters)
     }
 
-    static func totalDistance(coordinates: [CLLocationCoordinate2D]) -> CLLocationDistance {
-        guard coordinates.count > 1 else { return 0 }
-        var total: CLLocationDistance = 0
-        for (a, b) in zip(coordinates, coordinates.dropFirst()) {
-            total += CLLocation(latitude: a.latitude, longitude: a.longitude)
-                .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+    // MARK: - Freehand Path Processor (Freehand Method)
+
+    /// Cleans, smooths, and samples freehand drawn strokes into a simulation-ready path.
+    static func processFreehandPath(
+        coordinates: [CLLocationCoordinate2D],
+        sampleMeters: CLLocationDistance = 6,
+        smooth: Bool = true
+    ) -> [CLLocationCoordinate2D] {
+        guard coordinates.count >= 2 else { return coordinates }
+
+        // 1. Remove micro-duplicates (touches closer than 1.5m)
+        var deduped: [CLLocationCoordinate2D] = [coordinates[0]]
+        for pt in coordinates.dropFirst() {
+            let prev = deduped.last!
+            let d = CLLocation(latitude: prev.latitude, longitude: prev.longitude)
+                .distance(from: CLLocation(latitude: pt.latitude, longitude: pt.longitude))
+            if d >= 1.5 {
+                deduped.append(pt)
+            }
         }
-        return total
-    }
+        guard deduped.count >= 2 else { return coordinates }
 
-    static func formattedDistance(_ meters: CLLocationDistance) -> String {
-        if meters < 1000 {
-            return String(format: "%.0f m", meters)
+        // 2. Apply moving average smoothing if requested
+        let smoothed: [CLLocationCoordinate2D]
+        if smooth && deduped.count >= 4 {
+            smoothed = smoothMovingAverage(deduped, window: 3)
         } else {
-            return String(format: "%.2f km", meters / 1000.0)
+            smoothed = deduped
         }
+
+        // 3. Resample evenly along the smoothed curve
+        return sample(coordinates: smoothed, every: sampleMeters)
     }
 
-    static func formattedDuration(distance: CLLocationDistance, speedMPS: Double) -> String {
-        guard speedMPS > 0, distance > 0 else { return "0s" }
-        let seconds = Int(distance / speedMPS)
-        let hours = seconds / 3600
-        let minutes = (seconds % 3600) / 60
-        let secs = seconds % 60
-        if hours > 0 {
-            return "\(hours)h \(minutes)m"
-        } else if minutes > 0 {
-            return "\(minutes)m \(secs)s"
-        } else {
-            return "\(secs)s"
+    private static func smoothMovingAverage(
+        _ points: [CLLocationCoordinate2D],
+        window: Int = 3
+    ) -> [CLLocationCoordinate2D] {
+        guard points.count > window else { return points }
+        var result: [CLLocationCoordinate2D] = []
+        result.append(points[0])
+
+        let half = window / 2
+        for i in 1..<(points.count - 1) {
+            let start = max(0, i - half)
+            let end = min(points.count - 1, i + half)
+            let count = Double(end - start + 1)
+            var latSum = 0.0
+            var lonSum = 0.0
+            for j in start...end {
+                latSum += points[j].latitude
+                lonSum += points[j].longitude
+            }
+            result.append(CLLocationCoordinate2D(latitude: latSum / count, longitude: lonSum / count))
         }
+
+        result.append(points.last!)
+        return result
     }
+
+    // MARK: - Sampling & Interpolation
 
     static func sample(polyline: MKPolyline, every meters: CLLocationDistance) -> [CLLocationCoordinate2D] {
         var coords = [CLLocationCoordinate2D](repeating: .init(), count: polyline.pointCount)
@@ -143,15 +223,49 @@ enum RouteBuilder {
         }
         return sampled
     }
+
+    // MARK: - Metrics & Formatting
+
+    static func totalDistance(of coordinates: [CLLocationCoordinate2D]) -> CLLocationDistance {
+        guard coordinates.count > 1 else { return 0 }
+        var total: CLLocationDistance = 0
+        for (a, b) in zip(coordinates, coordinates.dropFirst()) {
+            total += CLLocation(latitude: a.latitude, longitude: a.longitude)
+                .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+        }
+        return total
+    }
+
+    static func formattedDistance(_ meters: CLLocationDistance) -> String {
+        if meters < 1000 {
+            return String(format: "%.0f m", meters)
+        } else {
+            return String(format: "%.2f km", meters / 1000.0)
+        }
+    }
+
+    static func estimatedDuration(distance: CLLocationDistance, speed: CLLocationSpeed) -> TimeInterval {
+        guard speed > 0.1 else { return 0 }
+        return distance / speed
+    }
+
+    static func formattedDuration(_ seconds: TimeInterval) -> String {
+        let totalSeconds = Int(seconds)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let secs = totalSeconds % 60
+
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        } else if minutes > 0 {
+            return "\(minutes)m \(secs)s"
+        } else {
+            return "\(secs)s"
+        }
+    }
 }
 
 // MARK: - GPX data model
-//
-// `GPXTrack`/`GPXTrackPoint` are the app's GPX-level representation: a name plus one or
-// more segments (`<trkseg>`) of points, each optionally carrying elevation/time. Every
-// existing call site only ever needs the flat path, so `GPXTrack.coordinates` gives back
-// exactly the `[CLLocationCoordinate2D]` they already worked with — nothing about the
-// map/joystick/route-playback code needs to know this richer type exists.
 
 struct GPXTrackPoint: Equatable {
     var coordinate: CLLocationCoordinate2D
@@ -176,8 +290,6 @@ struct GPXTrack: Equatable {
     var name: String?
     var segments: [[GPXTrackPoint]]
 
-    /// Flattened points across every segment, in order — the representation the rest of
-    /// the app already uses for the map polyline and joystick/route playback.
     var coordinates: [CLLocationCoordinate2D] {
         segments.flatMap { $0.map(\.coordinate) }
     }
@@ -212,9 +324,6 @@ enum GPXError: LocalizedError, Equatable {
 }
 
 enum GPXCodec {
-    /// Rich import: preserves segments, elevation, and timestamps when present.
-    /// Handles security-scoped URLs from `.fileImporter` / `onOpenURL` the same way the
-    /// previous implementation did.
     static func parseTrack(_ url: URL) throws -> GPXTrack {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
@@ -227,8 +336,6 @@ enum GPXCodec {
         return try parseTrack(data: data)
     }
 
-    /// Same parser, from raw GPX bytes directly (used by tests, and anything re-parsing
-    /// data it already has in memory).
     static func parseTrack(data: Data) throws -> GPXTrack {
         guard !data.isEmpty else { throw GPXError.malformedXML("the file is empty") }
         let delegate = GPXParserDelegate()
@@ -246,13 +353,10 @@ enum GPXCodec {
         return track
     }
 
-    /// Back-compat entry point: every existing call site just wants the flat path.
     static func parse(_ url: URL) throws -> [CLLocationCoordinate2D] {
         try parseTrack(url).coordinates
     }
 
-    /// Rich export: multiple `<trkseg>` blocks, with `<ele>`/`<time>` included per point
-    /// whenever the track has them.
     static func export(_ track: GPXTrack) -> String {
         var xml = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -286,17 +390,11 @@ enum GPXCodec {
         return xml
     }
 
-    /// Back-compat entry point: wraps a flat coordinate list (no elevation/time) into a
-    /// single-segment track — exactly what every existing call site already passes in.
     static func export(_ coordinates: [CLLocationCoordinate2D], name: String = "Locus Route") -> String {
         let points = coordinates.map { GPXTrackPoint(coordinate: $0) }
         return export(GPXTrack(name: name, segments: [points]))
     }
 
-    // MARK: - Formatting
-
-    /// 7 decimal places (~1cm at the equator) — comfortably preserves precision through
-    /// an export/re-import round trip without the file size of full double precision.
     private static func coordinateString(_ value: Double) -> String {
         String(format: "%.7f", value)
     }
@@ -305,8 +403,6 @@ enum GPXCodec {
         String(format: "%.2f", value)
     }
 
-    /// No fractional seconds on export, for maximum compatibility with GPX readers;
-    /// parsing (below) accepts fractional seconds too, for files from other tools.
     private static let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
@@ -314,13 +410,6 @@ enum GPXCodec {
     }()
 }
 
-/// SAX-style GPX parser. Only `<trk>` / `<trkseg>` / `<trkpt>` (and their `<ele>`/`<time>`
-/// children) are ever inspected for coordinates — waypoints (`<wpt>`), route points
-/// (`<rtept>`), and metadata such as `<bounds minlat="…" minlon="…" .../>` are never
-/// touched. The previous regex-based parser matched `lat="…" … lon="…"` anywhere in the
-/// file, so a `<bounds>` element (present in most real-world GPX exports) was silently
-/// misread as a track point — this is the actual reason GPX import produced wrong/broken
-/// routes.
 private final class GPXParserDelegate: NSObject, XMLParserDelegate {
     private var segments: [[GPXTrackPoint]] = []
     private var currentSegment: [GPXTrackPoint] = []
@@ -411,8 +500,6 @@ private final class GPXParserDelegate: NSObject, XMLParserDelegate {
 
         switch name {
         case "name":
-            // Only a track-level <trk><name>, never a <wpt><name> or top-level
-            // <metadata><name>, so those don't silently overwrite the track's name.
             if elementStack.count >= 2, elementStack[elementStack.count - 2] == "trk", !text.isEmpty {
                 trackName = text
             }
@@ -444,9 +531,6 @@ private final class GPXParserDelegate: NSObject, XMLParserDelegate {
         if !elementStack.isEmpty { elementStack.removeLast() }
     }
 
-    /// `XMLParser` reports the same failure two ways: this delegate callback, and a
-    /// `false` return from `parser.parse()` (which is what the caller above actually
-    /// checks, reading `parser.parserError` for the message). Nothing extra to do here.
     func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {}
 
     private static func localName(_ elementName: String) -> String {
@@ -463,4 +547,3 @@ private func xmlEscape(_ value: String) -> String {
         .replacingOccurrences(of: "\"", with: "&quot;")
         .replacingOccurrences(of: "'", with: "&apos;")
 }
-

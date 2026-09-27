@@ -45,6 +45,8 @@ final class SpoofSession: ObservableObject {
     @Published var lastError: String?
     @Published var isBusy = false
     @Published var joystickActive = false
+    @Published var isFollowingRoute = false
+    @Published var routeProgress: Double = 0.0
 
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
@@ -109,8 +111,7 @@ final class SpoofSession: ObservableObject {
     }
 
     func stop(pairing: PairingStore) {
-        routeTask?.cancel()
-        routeTask = nil
+        stopRoute()
         stopJoystick()
         stopResend()
         stopHealth()
@@ -132,6 +133,13 @@ final class SpoofSession: ObservableObject {
         }
     }
 
+    func stopRoute() {
+        routeTask?.cancel()
+        routeTask = nil
+        isFollowingRoute = false
+        routeProgress = 0.0
+    }
+
     /// Best-known real device coordinate (not the teleport pin).
     var realCoordinate: CLLocationCoordinate2D? {
         locationKeeper.lastKnownCoordinate
@@ -147,6 +155,7 @@ final class SpoofSession: ObservableObject {
             lastError = "Import an RPPairing file in Settings first."
             return
         }
+        stopRoute()
         let start = simulated ?? pin ?? locationKeeper.lastKnownCoordinate
         guard let start else {
             lastError = "Drop a pin or teleport somewhere before using the joystick."
@@ -175,43 +184,57 @@ final class SpoofSession: ObservableObject {
         joystickTimer = nil
     }
 
-    func followRoute(_ coordinates: [CLLocationCoordinate2D], pairing: PairingStore) {
+    func followRoute(_ coordinates: [CLLocationCoordinate2D], pairing: PairingStore, loop: Bool = false) {
         guard pairing.hasPairingFile, coordinates.count >= 2 else { return }
         routeTask?.cancel()
         stopJoystick()
-        // Resolved once, before the Task starts: the loop below runs off the main actor
-        // between `MainActor.run` hops, so it reads a plain captured value rather than
-        // touching actor-isolated state directly (matches how playback already didn't
-        // react live to travelMode changes mid-route).
+        isFollowingRoute = true
+        routeProgress = 0.0
+
         let speedMPS = currentSpeedMPS
         routeTask = Task { [weak self] in
             guard let self else { return }
-            var previous = coordinates[0]
-            await MainActor.run {
-                self.apply(previous, pairing: pairing, markRecent: true)
-            }
-            for next in coordinates.dropFirst() {
-                if Task.isCancelled { break }
-                let distance = CLLocation(latitude: previous.latitude, longitude: previous.longitude)
-                    .distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude))
-                var speed = speedMPS * Double.random(in: 0.88...1.12)
-                speed = max(0.8, speed)
-                let stepMeters: CLLocationDistance = min(12, max(4, speed * 0.5))
-                let steps = max(1, Int(ceil(distance / stepMeters)))
-                for i in 1...steps {
-                    if Task.isCancelled { break }
-                    let t = Double(i) / Double(steps)
-                    let coord = CLLocationCoordinate2D(
-                        latitude: previous.latitude + (next.latitude - previous.latitude) * t,
-                        longitude: previous.longitude + (next.longitude - previous.longitude) * t
-                    )
-                    let delay = stepMeters / speed
-                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                    await MainActor.run {
-                        self.apply(coord, pairing: pairing, markRecent: false)
-                    }
+            var shouldContinue = true
+            while shouldContinue && !Task.isCancelled {
+                var previous = coordinates[0]
+                await MainActor.run {
+                    self.apply(previous, pairing: pairing, markRecent: true)
+                    self.routeProgress = 0.0
                 }
-                previous = next
+                let totalSegments = max(1, coordinates.count - 1)
+                for (idx, next) in coordinates.dropFirst().enumerated() {
+                    if Task.isCancelled { break }
+                    let distance = CLLocation(latitude: previous.latitude, longitude: previous.longitude)
+                        .distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude))
+                    var speed = speedMPS * Double.random(in: 0.88...1.12)
+                    speed = max(0.8, speed)
+                    let stepMeters: CLLocationDistance = min(12, max(4, speed * 0.5))
+                    let steps = max(1, Int(ceil(distance / stepMeters)))
+                    for i in 1...steps {
+                        if Task.isCancelled { break }
+                        let t = Double(i) / Double(steps)
+                        let coord = CLLocationCoordinate2D(
+                            latitude: previous.latitude + (next.latitude - previous.latitude) * t,
+                            longitude: previous.longitude + (next.longitude - previous.longitude) * t
+                        )
+                        let delay = stepMeters / speed
+                        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                        await MainActor.run {
+                            self.apply(coord, pairing: pairing, markRecent: false)
+                        }
+                    }
+                    await MainActor.run {
+                        self.routeProgress = Double(idx + 1) / Double(totalSegments)
+                    }
+                    previous = next
+                }
+                if !loop || Task.isCancelled {
+                    shouldContinue = false
+                }
+            }
+            await MainActor.run {
+                self.isFollowingRoute = false
+                self.routeProgress = 0.0
             }
         }
     }
