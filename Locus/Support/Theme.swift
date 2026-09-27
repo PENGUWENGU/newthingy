@@ -155,6 +155,38 @@ enum ThemePreference {
         }
     }
 
+    static let customGlassTintEnabledKey = "locus.theme.custom_glass_tint_enabled"
+    static let customGlassTintHexKey = "locus.theme.custom_glass_tint_hex"
+    static let customCompletionFlashHexKey = "locus.theme.completion_flash_hex"
+
+    static var isGlassTintEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: customGlassTintEnabledKey) }
+        set { UserDefaults.standard.set(newValue, forKey: customGlassTintEnabledKey) }
+    }
+
+    static var customGlassTintHex: String {
+        get { UserDefaults.standard.string(forKey: customGlassTintHexKey) ?? "#101622" }
+        set { UserDefaults.standard.set(newValue, forKey: customGlassTintHexKey) }
+    }
+
+    static var glassTintColor: Color? {
+        guard isGlassTintEnabled else { return nil }
+        return Color(hex: customGlassTintHex)
+    }
+
+    static var customCompletionFlashHex: String {
+        get { UserDefaults.standard.string(forKey: customCompletionFlashHexKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: customCompletionFlashHexKey) }
+    }
+
+    static var completionFlashColor: Color {
+        let hex = customCompletionFlashHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !hex.isEmpty {
+            return Color(hex: hex)
+        }
+        return LocusTheme.accent
+    }
+
     static var showWaypointLabels: Bool {
         get {
             if UserDefaults.standard.object(forKey: showWaypointLabelsKey) == nil {
@@ -179,7 +211,9 @@ enum LocusTheme {
         ThemePreference.accent.secondaryColor
     }
 
-    static let danger = Color(red: 0.92, green: 0.32, blue: 0.36)
+    static var danger: Color {
+        Color(red: 0.92, green: 0.32, blue: 0.36)
+    }
 
     static var panelStroke: Color {
         switch ThemePreference.appearance {
@@ -208,24 +242,29 @@ struct LocusGlassModifier<S: Shape>: ViewModifier {
 
     func body(content: Content) -> some View {
         let appearance = ThemePreference.appearance
+        let effectiveTint = tint ?? ThemePreference.glassTintColor
 
         if appearance == .highContrast {
             content
                 .background {
-                    shape.fill(Color(white: 0.12).opacity(0.95))
+                    if let effectiveTint {
+                        shape.fill(effectiveTint.opacity(0.92))
+                    } else {
+                        shape.fill(Color(white: 0.12).opacity(0.95))
+                    }
                 }
                 .overlay(shape.stroke(LocusTheme.panelStroke, lineWidth: 1.5))
                 .contentShape(shape)
         } else if #available(iOS 26.0, *), appearance == .glass {
             content
-                .glassEffect(glass, in: shape)
+                .glassEffect(glass(with: effectiveTint), in: shape)
                 .contentShape(shape)
         } else {
             content
                 .background {
                     shape.fill(appearance == .minimal ? .thinMaterial : .ultraThinMaterial)
-                    if let tint {
-                        shape.fill(tint.opacity(0.45))
+                    if let effectiveTint {
+                        shape.fill(effectiveTint.opacity(0.40))
                     }
                 }
                 .overlay(shape.stroke(LocusTheme.panelStroke, lineWidth: 1))
@@ -234,10 +273,10 @@ struct LocusGlassModifier<S: Shape>: ViewModifier {
     }
 
     @available(iOS 26.0, *)
-    private var glass: Glass {
+    private func glass(with tintColor: Color?) -> Glass {
         var g: Glass = style == .clear ? .clear : .regular
         if style == .interactive { g = g.interactive() }
-        if let tint { g = g.tint(tint) }
+        if let tintColor { g = g.tint(tintColor) }
         return g
     }
 }

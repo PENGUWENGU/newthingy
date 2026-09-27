@@ -106,34 +106,40 @@ struct RoutePlannerSheet: View {
                     }
 
                     Section {
-                        HStack(spacing: 12) {
-                            Button {
-                                onAddPinAsWaypoint()
-                            } label: {
-                                Label("Add Pin", systemImage: "mappin.circle.fill")
-                                    .font(.subheadline.weight(.semibold))
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(session.pin == nil)
+                        if !waypoints.isEmpty {
+                            HStack {
+                                Text("\(waypoints.count) waypoint\(waypoints.count == 1 ? "" : "s") added")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
 
-                            Button {
-                                onAddSpoofAsWaypoint()
-                            } label: {
-                                Label("Add Spoof", systemImage: "location.circle.fill")
-                                    .font(.subheadline.weight(.semibold))
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(session.simulated == nil)
+                                Spacer()
 
-                            Spacer()
-
-                            if !waypoints.isEmpty {
-                                Button("Clear", role: .destructive) {
-                                    waypoints.removeAll()
-                                    calculatedRoute.removeAll()
+                                Button(role: .destructive) {
+                                    SoundManager.play(.alert)
+                                    withAnimation {
+                                        waypoints.removeAll()
+                                        calculatedRoute.removeAll()
+                                        if session.isFollowingRoute {
+                                            session.stopRoute()
+                                        }
+                                    }
+                                } label: {
+                                    Label("Delete All Points", systemImage: "trash")
+                                        .font(.subheadline.weight(.medium))
                                 }
-                                .font(.subheadline)
+                                .buttonStyle(.bordered)
+                                .tint(.red)
                             }
+                            .padding(.vertical, 2)
+                        } else {
+                            HStack {
+                                Image(systemName: "hand.tap.fill")
+                                    .foregroundStyle(LocusTheme.accent)
+                                Text("Tap anywhere on the map to add route points")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 4)
                         }
                     } header: {
                         Text("Waypoints (\(waypoints.count))")
@@ -535,17 +541,6 @@ struct RoutePlannerSheet: View {
                                 .foregroundStyle(LocusTheme.accent)
                         }
                     }
-                }
-
-                // MARK: - GPX Exchange
-                Section("GPX Exchange") {
-                    Button(action: onImportGPX) {
-                        Label("Import GPX Track", systemImage: "square.and.arrow.down")
-                    }
-                    Button(action: onExportGPX) {
-                        Label("Export Current GPX Track", systemImage: "square.and.arrow.up")
-                    }
-                    .disabled(activePath.isEmpty)
                 }
             }
             .navigationTitle("Route Planner")

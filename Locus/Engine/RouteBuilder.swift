@@ -167,7 +167,41 @@ enum RouteBuilder {
         guard let route = response.routes.first else {
             throw NSError(domain: "Locus", code: 1, userInfo: [NSLocalizedDescriptionKey: "No road route found between points."])
         }
-        return sample(polyline: route.polyline, every: 12)
+        var sampled = sample(polyline: route.polyline, every: mode == .sidewalk ? 7 : 12)
+        if mode == .sidewalk {
+            sampled = applySidewalkOffset(coordinates: sampled, offsetMeters: 3.2)
+        }
+        return sampled
+    }
+
+    /// Offsets path ~3.2m perpendicular to travel direction so the route follows pedestrian sidewalks rather than street centerlines
+    static func applySidewalkOffset(coordinates: [CLLocationCoordinate2D], offsetMeters: Double = 3.2) -> [CLLocationCoordinate2D] {
+        guard coordinates.count >= 2 else { return coordinates }
+        var result: [CLLocationCoordinate2D] = []
+        let earthRadius = 6378137.0 // meters
+
+        for i in 0..<coordinates.count {
+            let p = coordinates[i]
+            let heading: Double
+            if i < coordinates.count - 1 {
+                let next = coordinates[i + 1]
+                heading = atan2(next.longitude - p.longitude, next.latitude - p.latitude)
+            } else {
+                let prev = coordinates[i - 1]
+                heading = atan2(p.longitude - prev.longitude, p.latitude - prev.latitude)
+            }
+
+            // Normal angle 90 degrees to the right for standard sidewalk
+            let perpAngle = heading + (.pi / 2.0)
+            let latOffset = (offsetMeters * cos(perpAngle)) / earthRadius * (180.0 / .pi)
+            let lonOffset = (offsetMeters * sin(perpAngle)) / (earthRadius * cos(p.latitude * .pi / 180.0)) * (180.0 / .pi)
+
+            result.append(CLLocationCoordinate2D(
+                latitude: p.latitude + latOffset,
+                longitude: p.longitude + lonOffset
+            ))
+        }
+        return result
     }
 
     // MARK: - Multi-Point Road Route (Points Method)

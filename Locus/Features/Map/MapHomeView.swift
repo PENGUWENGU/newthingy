@@ -32,6 +32,11 @@ struct MapHomeView: View {
     @State private var editingStopWaypointIndex: Int? = nil
     @State private var pathDashPhase: CGFloat = 0
     @State private var puckPulsing = false
+    @State private var showEndSpoofConfirmation = false
+    @State private var showFavoritePrompt = false
+    @State private var pendingFavoriteCoordinate: CLLocationCoordinate2D? = nil
+    @State private var favoriteNameInput = ""
+    @State private var showFavoriteAnimation = false
     private let pathAnimationTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     // Standard Pin State
@@ -249,6 +254,33 @@ struct MapHomeView: View {
             .background(Color.black.ignoresSafeArea())
 
             topChrome
+
+            if session.routeFinishedFlash {
+                ThemePreference.completionFlashColor
+                    .opacity(0.4)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+
+            if showFavoriteAnimation {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 8) {
+                        Image(systemName: "star.fill")
+                            .font(.body.weight(.black))
+                            .foregroundStyle(.yellow)
+                        Text("Saved to Favorites!")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.primary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Capsule().fill(Color(UIColor.secondarySystemBackground)).shadow(color: LocusTheme.accent.opacity(0.4), radius: 12, y: 4))
+                    .transition(.scale.combined(with: .opacity))
+                    .padding(.bottom, 100)
+                }
+            }
         }
         .onAppear {
             session.startLocationUpdates()
@@ -270,19 +302,6 @@ struct MapHomeView: View {
         .onChange(of: session.pin?.latitude) { _, newValue in
             if newValue == nil { pinSelected = false }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .locusImportGPX)) { note in
-            guard let url = note.object as? URL else { return }
-            importGPX(url)
-        }
-        .fileImporter(
-            isPresented: $showGPXImporter,
-            allowedContentTypes: [UTType(filenameExtension: "gpx"), UTType.xml, UTType.data].compactMap { $0 },
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                importGPX(url)
-            }
-        }
         .sheet(isPresented: $showRouteSheet) {
             RoutePlannerSheet(
                 method: $routeMethod,
@@ -294,9 +313,11 @@ struct MapHomeView: View {
                 loopRoute: $loopRoute,
                 onBuildRoute: buildPointsRoute,
                 onPlayRoute: playRoute,
-                onStopRoute: { session.stopRoute() },
-                onImportGPX: { showGPXImporter = true },
-                onExportGPX: exportGPX,
+                onStopRoute: {
+                    showEndSpoofConfirmation = true
+                },
+                onImportGPX: {},
+                onExportGPX: {},
                 onSmoothFreehand: smoothFreehandRoute,
                 onClearRoute: clearAllRouteData,
                 onAddPinAsWaypoint: addPinAsWaypoint,
@@ -319,17 +340,53 @@ struct MapHomeView: View {
                     initialDuration: waypoints[idx].stopDuration
                 ) { newDuration in
                     waypoints[idx].stopDuration = newDuration
+                    if session.isFollowingRoute {
+                        session.updateActiveRoute(displayRouteCoordinates, waypoints: waypoints, loop: loopRoute)
+                    }
                 }
             }
         }
         .alert("Save Route", isPresented: $showMapSaveRouteAlert) {
             TextField("Route Name", text: $mapSaveRouteName)
             Button("Save") {
+                SoundManager.play(.success)
                 saveCurrentRouteFromMap()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Enter a name to save this route to your device.")
+        }
+        .alert("End Route Spoofing?", isPresented: $showEndSpoofConfirmation) {
+            Button("End Spoof", role: .destructive) {
+                SoundManager.play(.alert)
+                withAnimation {
+                    session.stopRoute()
+                }
+            }
+            Button("Continue Route", role: .cancel) {
+                SoundManager.play(.tap)
+            }
+        } message: {
+            Text("Are you sure you want to stop following this route and end simulated movement?")
+        }
+        .alert("Save Favorite Place", isPresented: $showFavoritePrompt) {
+            TextField("Place Name", text: $favoriteNameInput)
+            Button("Save") {
+                if let coord = pendingFavoriteCoordinate {
+                    let finalName = favoriteNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Favorite Place" : favoriteNameInput
+                    session.addFavorite(name: finalName, coordinate: coord)
+                    SoundManager.play(.success)
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
+                        showFavoriteAnimation = true
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        withAnimation { showFavoriteAnimation = false }
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Enter a custom name for this favorite location.")
         }
     }
 
@@ -569,142 +626,32 @@ struct MapHomeView: View {
     private var routeControlPanel: some View {
         VStack(spacing: 8) {
             if session.isFollowingRoute {
-                // Live Navigation Tracking Bar with ETA and Pause/Resume
-                VStack(spacing: 8) {
-                    if let stopName = session.activeStopName, let rem = session.activeStopRemainingSeconds {
-                        HStack(spacing: 10) {
-                            Image(systemName: "clock.badge.checkmark.fill")
-                                .font(.body.weight(.bold))
-                                .foregroundStyle(Color.orange)
-
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("At Stop: \(stopName)")
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(.primary)
-                                Text("Dwelling • \(RouteBuilder.formattedDuration(rem)) remaining")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            Button {
-                                session.skipStop()
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text("Skip")
-                                    Image(systemName: "forward.fill")
-                                }
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(Capsule().fill(Color.orange))
-                            }
-                            .buttonStyle(.plain)
+                TransitRouteBannerView(
+                    session: session,
+                    onTogglePause: {
+                        SoundManager.play(.toggle)
+                        withAnimation {
+                            session.togglePauseRoute()
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color.orange.opacity(0.12))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .stroke(Color.orange.opacity(0.3), lineWidth: 1)
-                                )
-                        )
+                    },
+                    onStop: {
+                        SoundManager.play(.alert)
+                        showEndSpoofConfirmation = true
+                    },
+                    onSkipStop: {
+                        SoundManager.play(.tap)
+                        session.skipStop()
+                    },
+                    onOpenPlanner: {
+                        SoundManager.play(.tap)
+                        showRouteSheet = true
                     }
-
-                    HStack(alignment: .center, spacing: 10) {
-                        Image(systemName: session.isRoutePaused ? "pause.circle.fill" : "location.north.line.fill")
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(session.isRoutePaused ? .orange : LocusTheme.statusGood)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(session.isRoutePaused ? "PAUSED" : "ETA: \(RouteBuilder.formattedETA(session.remainingRouteDuration))")
-                                    .font(.subheadline.weight(.bold))
-                                    .foregroundStyle(.primary)
-
-                                if session.isRoutePaused {
-                                    Text("(\(RouteBuilder.formattedDuration(session.remainingRouteDuration)) left)")
-                                        .font(.caption.weight(.medium))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-
-                            Text("\(RouteBuilder.formattedDistance(session.remainingRouteDistance)) remaining • \(String(format: "%.1f", session.currentSpeedMPS)) m/s")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        Text("\(Int(session.routeProgress * 100))%")
-                            .font(.caption.monospacedDigit().weight(.bold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.primary.opacity(0.08)))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    ProgressView(value: session.routeProgress)
-                        .tint(session.isRoutePaused ? .orange : LocusTheme.accent)
-
-                    HStack(spacing: 8) {
-                        // Pause / Resume Toggle Button
-                        Button {
-                            withAnimation {
-                                session.togglePauseRoute()
-                            }
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: session.isRoutePaused ? "play.fill" : "pause.fill")
-                                Text(session.isRoutePaused ? "Resume" : "Pause")
-                                    .font(.subheadline.weight(.bold))
-                            }
-                            .foregroundStyle(session.isRoutePaused ? .black : .white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .background(Capsule().fill(session.isRoutePaused ? LocusTheme.statusGood : Color.orange))
-                        }
-                        .buttonStyle(.plain)
-
-                        // Stop Button
-                        Button {
-                            withAnimation {
-                                session.stopRoute()
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "stop.fill")
-                                Text("Stop")
-                                    .font(.subheadline.weight(.semibold))
-                            }
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(Capsule().fill(LocusTheme.danger))
-                        }
-                        .buttonStyle(.plain)
-
-                        Spacer()
-
-                        Button {
-                            showRouteSheet = true
-                        } label: {
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.body.weight(.semibold))
-                                .frame(width: 36, height: 36)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(LocusTheme.accent)
-                    }
-                }
+                )
             } else {
                 // Method Switcher: Points vs Freehand
                 HStack(spacing: 8) {
                     Button {
+                        SoundManager.play(.tap)
                         withAnimation { routeMethod = .points }
                     } label: {
                         HStack(spacing: 6) {
@@ -722,7 +669,23 @@ struct MapHomeView: View {
                     .buttonStyle(.plain)
 
                     Button {
+                        SoundManager.play(.tap)
                         withAnimation { routeMethod = .freehand }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "pencil.and.scribble")
+                            Text("Freehand")
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(routeMethod == .freehand ? .black : .primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule().fill(routeMethod == .freehand ? LocusTheme.accent : Color.primary.opacity(0.08))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "pencil.tip.crop.circle")
@@ -964,9 +927,12 @@ struct MapHomeView: View {
 
             if session.pin != nil {
                 chromeIconButton("star.circle") {
+                    SoundManager.play(.tap)
                     if let pin = session.pin {
                         let name = session.suggestedFavoriteName(for: pin, fallback: pinPlaceName)
-                        session.addFavorite(name: name, coordinate: pin)
+                        favoriteNameInput = name
+                        pendingFavoriteCoordinate = pin
+                        showFavoritePrompt = true
                     }
                 }
             }

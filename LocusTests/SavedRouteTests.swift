@@ -139,4 +139,12 @@ final class SavedRouteTests: XCTestCase {
         let wp4 = RouteWaypoint(coordinate: p1, name: "Stop 4", stopDuration: 180) // 3m
         XCTAssertEqual(wp4.formattedStopDuration, "3m")
     }
+
+    func testTravelModesAndSpeeds() {
+        XCTAssertEqual(TravelMode.sidewalk.title, "Sidewalk")
+        XCTAssertEqual(TravelMode.bus.title, "Bus")
+        XCTAssertGreaterThan(TravelMode.bus.defaultSpeedMPS, TravelMode.walk.defaultSpeedMPS)
+        XCTAssertEqual(TravelMode.sidewalk.icon, "figure.walk.arrival")
+        XCTAssertEqual(TravelMode.bus.icon, "bus.fill")
+    }
 }

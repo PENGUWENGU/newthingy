@@ -3,15 +3,17 @@ import MapKit
 import Foundation
 
 enum TravelMode: String, CaseIterable, Identifiable {
-    case walk, run, cycle, drive
+    case walk, sidewalk, run, cycle, bus, drive
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .walk: return "Walk"
+        case .sidewalk: return "Sidewalk"
         case .run: return "Run"
         case .cycle: return "Cycle"
+        case .bus: return "Bus"
         case .drive: return "Drive"
         }
     }
@@ -19,8 +21,10 @@ enum TravelMode: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .walk: return "figure.walk"
+        case .sidewalk: return "figure.walk.motion"
         case .run: return "figure.run"
         case .cycle: return "bicycle"
+        case .bus: return "bus.fill"
         case .drive: return "car.fill"
         }
     }
@@ -28,17 +32,19 @@ enum TravelMode: String, CaseIterable, Identifiable {
     /// Base meters per second before natural variation.
     var baseSpeed: CLLocationSpeed {
         switch self {
-        case .walk: return 1.4
-        case .run: return 3.3
-        case .cycle: return 6.5
-        case .drive: return 13.4
+        case .walk: return 1.4      // ~3.1 mph
+        case .sidewalk: return 1.25 // ~2.8 mph (pedestrian sidewalk pacing)
+        case .run: return 3.3       // ~7.4 mph
+        case .cycle: return 6.5     // ~14.5 mph
+        case .bus: return 8.9       // ~20.0 mph (transit bus pacing)
+        case .drive: return 13.4    // ~30.0 mph
         }
     }
 
     var mkTransportType: MKDirectionsTransportType {
         switch self {
-        case .walk, .run: return .walking
-        case .cycle, .drive: return .automobile
+        case .walk, .sidewalk, .run: return .walking
+        case .cycle, .bus, .drive: return .automobile
         }
     }
 }

@@ -7,6 +7,8 @@ struct ThemeCustomizerSheet: View {
     enum CustomTarget: String, CaseIterable, Identifiable {
         case primary = "Primary Accent"
         case secondary = "Secondary Accent"
+        case glassTint = "Glass Tint"
+        case completionFlash = "Route Complete Flash"
         var id: String { rawValue }
     }
 
@@ -31,6 +33,8 @@ struct ThemeCustomizerSheet: View {
     @State private var briVal: Double = 78
     @State private var nativeColor: Color = .teal
 
+    @State private var soundEnabled: Bool = SoundManager.shared.isSoundEnabled
+
     var body: some View {
         NavigationStack {
             Form {
@@ -46,6 +50,9 @@ struct ThemeCustomizerSheet: View {
                 // MARK: - UI Glass & Material Style
                 appearanceStyleSection
 
+                // MARK: - Sound Feedback
+                soundEffectsSection
+
                 // MARK: - Map Waypoint Badges
                 mapOverlaysSection
             }
@@ -54,18 +61,36 @@ struct ThemeCustomizerSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
+                        SoundManager.play(.tap)
                         dismiss()
                     }
                     .font(.body.weight(.semibold))
                 }
             }
             .onAppear {
+                soundEnabled = SoundManager.shared.isSoundEnabled
                 loadCurrentColors()
             }
         }
     }
 
     // MARK: - Sections
+    
+    private var soundEffectsSection: some View {
+        Section {
+            Toggle("Button Audio Feedback", isOn: $soundEnabled)
+                .onChange(of: soundEnabled) { _, newValue in
+                    SoundManager.shared.isSoundEnabled = newValue
+                    if newValue {
+                        SoundManager.play(.tap)
+                    }
+                }
+        } header: {
+            Text("Sound & Feedback")
+        } footer: {
+            Text("Plays subtle system sound effects when tapping controls, toggling modes, and completing actions.")
+        }
+    }
 
     private var presetThemesSection: some View {
         Section {
@@ -410,11 +435,23 @@ struct ThemeCustomizerSheet: View {
     // MARK: - Helpers
 
     private var currentHex: String {
-        customTarget == .primary ? ThemePreference.customPrimaryHex : ThemePreference.customSecondaryHex
+        switch customTarget {
+        case .primary: return ThemePreference.customPrimaryHex
+        case .secondary: return ThemePreference.customSecondaryHex
+        case .glassTint: return ThemePreference.glassTintHex
+        case .completionFlash: return ThemePreference.completionFlashHex
+        }
     }
 
     private var currentColor: Color {
-        Color(hex: currentHex) ?? (customTarget == .primary ? Color(red: 0.35, green: 0.78, blue: 0.72) : Color(red: 0.95, green: 0.55, blue: 0.28))
+        Color(hex: currentHex) ?? {
+            switch customTarget {
+            case .primary: return Color(red: 0.35, green: 0.78, blue: 0.72)
+            case .secondary: return Color(red: 0.95, green: 0.55, blue: 0.28)
+            case .glassTint: return Color(red: 0.35, green: 0.78, blue: 0.72)
+            case .completionFlash: return Color.green
+            }
+        }()
     }
 
     private func loadCurrentColors() {
@@ -436,12 +473,22 @@ struct ThemeCustomizerSheet: View {
         }
     }
 
-    private func applyHex(_ hex: String) {
-        if customTarget == .primary {
+    private func applyTargetHex(_ hex: String) {
+        switch customTarget {
+        case .primary:
             session.setCustomPrimaryHex(hex)
-        } else {
+        case .secondary:
             session.setCustomSecondaryHex(hex)
+        case .glassTint:
+            ThemePreference.glassTintHex = hex
+            ThemePreference.hasCustomGlassTint = true
+        case .completionFlash:
+            ThemePreference.completionFlashHex = hex
         }
+    }
+
+    private func applyHex(_ hex: String) {
+        applyTargetHex(hex)
         if let color = Color(hex: hex) {
             let rgb = color.componentsRGB()
             redVal = Double(rgb.r)
@@ -471,11 +518,7 @@ struct ThemeCustomizerSheet: View {
         satVal = hsb.s
         briVal = hsb.b
 
-        if customTarget == .primary {
-            session.setCustomPrimaryHex(hex)
-        } else {
-            session.setCustomSecondaryHex(hex)
-        }
+        applyTargetHex(hex)
     }
 
     private func applyHSB() {
@@ -489,10 +532,6 @@ struct ThemeCustomizerSheet: View {
         greenVal = Double(rgb.g)
         blueVal = Double(rgb.b)
 
-        if customTarget == .primary {
-            session.setCustomPrimaryHex(hex)
-        } else {
-            session.setCustomSecondaryHex(hex)
-        }
+        applyTargetHex(hex)
     }
 }
