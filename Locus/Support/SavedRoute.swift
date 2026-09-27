@@ -30,12 +30,19 @@ struct SavedWaypoint: Codable, Equatable, Identifiable, Hashable {
     var latitude: Double
     var longitude: Double
     var name: String
+    var stopDuration: TimeInterval?
 
-    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, name: String = "") {
+    init(
+        id: UUID = UUID(),
+        coordinate: CLLocationCoordinate2D,
+        name: String = "",
+        stopDuration: TimeInterval = 0
+    ) {
         self.id = id
         self.latitude = coordinate.latitude
         self.longitude = coordinate.longitude
         self.name = name
+        self.stopDuration = stopDuration > 0 ? stopDuration : nil
     }
 
     var coordinate: CLLocationCoordinate2D {
@@ -43,7 +50,7 @@ struct SavedWaypoint: Codable, Equatable, Identifiable, Hashable {
     }
 
     var routeWaypoint: RouteWaypoint {
-        RouteWaypoint(id: id, coordinate: coordinate, name: name)
+        RouteWaypoint(id: id, coordinate: coordinate, name: name, stopDuration: stopDuration ?? 0)
     }
 }
 
@@ -77,7 +84,7 @@ struct SavedRoute: Identifiable, Codable, Equatable {
         self.createdAt = createdAt
         self.methodRaw = method.rawValue
         self.connectionTypeRaw = connectionType.rawValue
-        self.waypoints = waypoints.map { SavedWaypoint(id: $0.id, coordinate: $0.coordinate, name: $0.name) }
+        self.waypoints = waypoints.map { SavedWaypoint(id: $0.id, coordinate: $0.coordinate, name: $0.name, stopDuration: $0.stopDuration) }
         self.coordinates = coordinates.map { CodableCoordinate($0) }
         self.distanceMeters = distanceMeters
         self.isLoop = isLoop

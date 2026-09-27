@@ -27,6 +27,7 @@ struct MapHomeView: View {
     @State private var importedGPXTrack: GPXTrack?
     @State private var showMapSaveRouteAlert = false
     @State private var mapSaveRouteName = ""
+    @State private var showThemeSheet = false
     @State private var pathDashPhase: CGFloat = 0
     @State private var puckPulsing = false
     private let pathAnimationTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
@@ -117,12 +118,16 @@ struct MapHomeView: View {
                                     WaypointPinView(
                                         index: index,
                                         total: waypoints.count,
+                                        stopDuration: wp.stopDuration,
                                         isSelected: selectedWaypointId == wp.id,
                                         onSelect: {
                                             selectedWaypointId = (selectedWaypointId == wp.id) ? nil : wp.id
                                         },
                                         onRemove: {
                                             removeWaypoint(at: index)
+                                        },
+                                        onToggleStop: {
+                                            toggleWaypointStop(at: index)
                                         }
                                     )
                                 }
@@ -156,7 +161,7 @@ struct MapHomeView: View {
                                 MapPolyline(coordinates: session.completedRouteCoordinates)
                                     .stroke(
                                         routeMethod == .freehand ? LocusTheme.accentSecondary.opacity(0.3) : LocusTheme.accent.opacity(0.3),
-                                        style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [6, 4])
+                                        style: StrokeStyle(lineWidth: max(3, session.pathWidth.width - 1.5), lineCap: .round, lineJoin: .round, dash: [6, 4])
                                     )
                             }
 
@@ -166,14 +171,14 @@ struct MapHomeView: View {
                                 MapPolyline(coordinates: session.remainingRouteCoordinates)
                                     .stroke(
                                         (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.35),
-                                        style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round)
+                                        style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
                                     )
 
                                 // Main prominent polyline
                                 MapPolyline(coordinates: session.remainingRouteCoordinates)
                                     .stroke(
                                         routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
-                                        style: StrokeStyle(lineWidth: 5.5, lineCap: .round, lineJoin: .round)
+                                        style: StrokeStyle(lineWidth: session.pathWidth.width, lineCap: .round, lineJoin: .round)
                                     )
 
                                 // Directional animated progress line flowing towards destination
@@ -181,7 +186,7 @@ struct MapHomeView: View {
                                     .stroke(
                                         Color.white.opacity(session.isRoutePaused ? 0.25 : 0.75),
                                         style: StrokeStyle(
-                                            lineWidth: 2.5,
+                                            lineWidth: max(2, session.pathWidth.width * 0.45),
                                             lineCap: .round,
                                             lineJoin: .round,
                                             dash: [8, 12],
@@ -194,14 +199,14 @@ struct MapHomeView: View {
                             MapPolyline(coordinates: displayRouteCoordinates)
                                 .stroke(
                                     (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.25),
-                                    style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round)
+                                    style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
                                 )
 
                             MapPolyline(coordinates: displayRouteCoordinates)
                                 .stroke(
                                     routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
                                     style: StrokeStyle(
-                                        lineWidth: 5,
+                                        lineWidth: session.pathWidth.width,
                                         lineCap: .round,
                                         lineJoin: .round
                                     )
@@ -299,6 +304,9 @@ struct MapHomeView: View {
             )
             .presentationDetents([.medium, .large])
         }
+        .sheet(isPresented: $showThemeSheet) {
+            ThemeCustomizerSheet(session: session)
+        }
         .alert("Save Route", isPresented: $showMapSaveRouteAlert) {
             TextField("Route Name", text: $mapSaveRouteName)
             Button("Save") {
@@ -382,6 +390,24 @@ struct MapHomeView: View {
         }
     }
 
+    private func toggleWaypointStop(at index: Int) {
+        guard index < waypoints.count else { return }
+        let current = waypoints[index].stopDuration
+        let next: TimeInterval
+        if current == 0 {
+            next = 30
+        } else if current == 30 {
+            next = 60
+        } else if current == 60 {
+            next = 120
+        } else if current == 120 {
+            next = 300
+        } else {
+            next = 0
+        }
+        waypoints[index].stopDuration = next
+    }
+
     private func addPinAsWaypoint() {
         guard let pin = session.pin else { return }
         addWaypoint(pin)
@@ -443,7 +469,7 @@ struct MapHomeView: View {
                 routeMethod = .points
             }
         }
-        session.followRoute(path, pairing: pairing, loop: loopRoute)
+        session.followRoute(path, waypoints: waypoints, pairing: pairing, loop: loopRoute)
     }
 
     private func saveCurrentRouteFromMap() {
@@ -530,6 +556,50 @@ struct MapHomeView: View {
             if session.isFollowingRoute {
                 // Live Navigation Tracking Bar with ETA and Pause/Resume
                 VStack(spacing: 8) {
+                    if let stopName = session.activeStopName, let rem = session.activeStopRemainingSeconds {
+                        HStack(spacing: 10) {
+                            Image(systemName: "clock.badge.checkmark.fill")
+                                .font(.body.weight(.bold))
+                                .foregroundStyle(Color.orange)
+
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("At Stop: \(stopName)")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(.primary)
+                                Text("Dwelling • \(Int(ceil(rem)))s remaining")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            Button {
+                                session.skipStop()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text("Skip")
+                                    Image(systemName: "forward.fill")
+                                }
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Capsule().fill(Color.orange))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.orange.opacity(0.12))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                                )
+                        )
+                    }
+
                     HStack(alignment: .center, spacing: 10) {
                         Image(systemName: session.isRoutePaused ? "pause.circle.fill" : "location.north.line.fill")
                             .font(.title3.weight(.bold))
@@ -841,6 +911,12 @@ struct MapHomeView: View {
             chromeIconButton("square.3.layers.3d") {
                 session.mapStyleIndex = (session.mapStyleIndex + 1) % 3
             }
+
+            // Theme / UI Customization Button
+            chromeIconButton("paintpalette.fill") {
+                showThemeSheet = true
+            }
+            .foregroundStyle(session.accentTheme.primaryColor)
 
             // Route Feature Button
             chromeIconButton("point.topleft.down.to.point.bottomright.curvepath") {

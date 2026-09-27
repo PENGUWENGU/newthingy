@@ -52,11 +52,17 @@ final class SpoofSession: ObservableObject {
     @Published var remainingRouteDuration: TimeInterval = 0.0
     @Published var completedRouteCoordinates: [CLLocationCoordinate2D] = []
     @Published var remainingRouteCoordinates: [CLLocationCoordinate2D] = []
+    @Published var activeStopName: String? = nil
+    @Published var activeStopRemainingSeconds: Double? = nil
 
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
     @Published var savedRoutes: [SavedRoute] = []
     @Published var defaultConnectionType: RouteConnectionType = RouteConnectionPreference.defaultType
+    @Published var accentTheme: AccentColorTheme = ThemePreference.accent
+    @Published var pathWidth: PathWidthPreference = ThemePreference.pathWidth
+    @Published var uiAppearance: UIAppearanceStyle = ThemePreference.appearance
+    @Published var showWaypointLabels: Bool = ThemePreference.showWaypointLabels
 
     private var resendTimer: Timer?
     private var healthTimer: Timer?
@@ -65,6 +71,7 @@ final class SpoofSession: ObservableObject {
     private var backgroundTask = UIBackgroundTaskIdentifier.invalid
     private var joystickVector: CGVector = .zero
     private let locationKeeper = BackgroundKeepAlive()
+    private var skipCurrentStopRequested = false
 
     private let favoritesKey = "locus.favorites"
     private let recentsKey = "locus.recents"
@@ -75,12 +82,40 @@ final class SpoofSession: ObservableObject {
         recents = SavedPlace.load(key: recentsKey)
         savedRoutes = SavedRoute.load(key: savedRoutesKey)
         defaultConnectionType = RouteConnectionPreference.defaultType
+        accentTheme = ThemePreference.accent
+        pathWidth = ThemePreference.pathWidth
+        uiAppearance = ThemePreference.appearance
+        showWaypointLabels = ThemePreference.showWaypointLabels
         customSpeedMPS = SpeedPreference.storedValue
     }
 
     func setDefaultConnectionType(_ type: RouteConnectionType) {
         defaultConnectionType = type
         RouteConnectionPreference.defaultType = type
+    }
+
+    func skipStop() {
+        skipCurrentStopRequested = true
+    }
+
+    func setAccentTheme(_ theme: AccentColorTheme) {
+        accentTheme = theme
+        ThemePreference.accent = theme
+    }
+
+    func setPathWidth(_ width: PathWidthPreference) {
+        pathWidth = width
+        ThemePreference.pathWidth = width
+    }
+
+    func setUIAppearance(_ style: UIAppearanceStyle) {
+        uiAppearance = style
+        ThemePreference.appearance = style
+    }
+
+    func setShowWaypointLabels(_ show: Bool) {
+        showWaypointLabels = show
+        ThemePreference.showWaypointLabels = show
     }
 
     var isSpoofing: Bool {
@@ -158,6 +193,9 @@ final class SpoofSession: ObservableObject {
         remainingRouteDuration = 0.0
         completedRouteCoordinates = []
         remainingRouteCoordinates = []
+        activeStopName = nil
+        activeStopRemainingSeconds = nil
+        skipCurrentStopRequested = false
     }
 
     func pauseRoute() {
@@ -222,17 +260,27 @@ final class SpoofSession: ObservableObject {
         joystickTimer = nil
     }
 
-    func followRoute(_ coordinates: [CLLocationCoordinate2D], pairing: PairingStore, loop: Bool = false) {
+    func followRoute(
+        _ coordinates: [CLLocationCoordinate2D],
+        waypoints: [RouteWaypoint] = [],
+        pairing: PairingStore,
+        loop: Bool = false
+    ) {
         guard pairing.hasPairingFile, coordinates.count >= 2 else { return }
         routeTask?.cancel()
         stopJoystick()
         isFollowingRoute = true
         isRoutePaused = false
         routeProgress = 0.0
+        activeStopName = nil
+        activeStopRemainingSeconds = nil
+        skipCurrentStopRequested = false
 
         let totalRouteDistance = RouteBuilder.totalDistance(of: coordinates)
         remainingRouteDistance = totalRouteDistance
-        remainingRouteDuration = RouteBuilder.estimatedDuration(distance: totalRouteDistance, speed: currentSpeedMPS)
+        let travelDuration = RouteBuilder.estimatedDuration(distance: totalRouteDistance, speed: currentSpeedMPS)
+        let totalStopsDuration = waypoints.reduce(0) { $0 + $1.stopDuration }
+        remainingRouteDuration = travelDuration + totalStopsDuration
 
         // Precompute cumulative suffix distances to quickly compute accurate remaining distance
         var suffixDistances = [CLLocationDistance](repeating: 0, count: coordinates.count)
@@ -242,19 +290,32 @@ final class SpoofSession: ObservableObject {
             suffixDistances[i] = suffixDistances[i + 1] + seg
         }
 
+        let definedStops = waypoints.filter { $0.stopDuration > 0 }
+
         routeTask = Task { [weak self] in
             guard let self else { return }
             var shouldContinue = true
             while shouldContinue && !Task.isCancelled {
+                var pendingStops = definedStops
                 var previous = coordinates[0]
                 await MainActor.run {
                     self.apply(previous, pairing: pairing, markRecent: true)
                     self.routeProgress = 0.0
                     self.remainingRouteDistance = totalRouteDistance
-                    self.remainingRouteDuration = RouteBuilder.estimatedDuration(distance: totalRouteDistance, speed: self.currentSpeedMPS)
+                    self.remainingRouteDuration = travelDuration + totalStopsDuration
                     self.completedRouteCoordinates = [previous]
                     self.remainingRouteCoordinates = coordinates
                 }
+
+                // Check starting point stop
+                if let stopIdx = pendingStops.firstIndex(where: {
+                    CLLocation(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude)
+                        .distance(from: CLLocation(latitude: previous.latitude, longitude: previous.longitude)) < 15
+                }) {
+                    let stop = pendingStops.remove(at: stopIdx)
+                    await self.performStop(stop)
+                }
+
                 let totalSegments = max(1, coordinates.count - 1)
                 for (idx, next) in coordinates.dropFirst().enumerated() {
                     if Task.isCancelled { break }
@@ -298,7 +359,8 @@ final class SpoofSession: ObservableObject {
 
                         let remainingInSegment = segDist * (1.0 - t)
                         let remainingDistance = remainingInSegment + suffixDistances[idx + 1]
-                        let remainingDuration = RouteBuilder.estimatedDuration(distance: remainingDistance, speed: self.currentSpeedMPS)
+                        let remainingTravel = RouteBuilder.estimatedDuration(distance: remainingDistance, speed: self.currentSpeedMPS)
+                        let remainingStops = pendingStops.reduce(0) { $0 + $1.stopDuration }
 
                         // Slices for animated polyline progress
                         let completedSlice = Array(coordinates[0...idx]) + [coord]
@@ -307,7 +369,7 @@ final class SpoofSession: ObservableObject {
                         await MainActor.run {
                             self.apply(coord, pairing: pairing, markRecent: false)
                             self.remainingRouteDistance = remainingDistance
-                            self.remainingRouteDuration = remainingDuration
+                            self.remainingRouteDuration = remainingTravel + remainingStops
                             self.completedRouteCoordinates = completedSlice
                             self.remainingRouteCoordinates = remainingSlice
                         }
@@ -316,6 +378,16 @@ final class SpoofSession: ObservableObject {
                     await MainActor.run {
                         self.routeProgress = Double(idx + 1) / Double(totalSegments)
                     }
+
+                    // Check if 'next' coordinate matches a pending stop
+                    if let stopIdx = pendingStops.firstIndex(where: {
+                        CLLocation(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude)
+                            .distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude)) < 15
+                    }) {
+                        let stop = pendingStops.remove(at: stopIdx)
+                        await self.performStop(stop)
+                    }
+
                     previous = next
                 }
                 if !loop || Task.isCancelled {
@@ -330,7 +402,41 @@ final class SpoofSession: ObservableObject {
                 self.remainingRouteDuration = 0.0
                 self.completedRouteCoordinates = []
                 self.remainingRouteCoordinates = []
+                self.activeStopName = nil
+                self.activeStopRemainingSeconds = nil
             }
+        }
+    }
+
+    private func performStop(_ stop: RouteWaypoint) async {
+        guard stop.stopDuration > 0 else { return }
+        let stopName = stop.name.isEmpty ? "Scheduled Stop" : stop.name
+        let duration = stop.stopDuration
+        await MainActor.run {
+            self.activeStopName = stopName
+            self.activeStopRemainingSeconds = duration
+        }
+
+        var elapsed: Double = 0
+        while elapsed < duration && !Task.isCancelled {
+            while self.isRoutePaused && !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            if self.skipCurrentStopRequested {
+                self.skipCurrentStopRequested = false
+                break
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            elapsed += 0.25
+            let remaining = max(0, duration - elapsed)
+            await MainActor.run {
+                self.activeStopRemainingSeconds = remaining
+            }
+        }
+
+        await MainActor.run {
+            self.activeStopName = nil
+            self.activeStopRemainingSeconds = nil
         }
     }
 

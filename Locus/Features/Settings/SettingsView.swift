@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var showImporter = false
     @State private var showPairOnDevice = false
     @State private var showNameEasterEgg = false
+    @State private var showThemeCustomizer = false
     @State private var tunnelIP = TunnelConfig.targetIP
     @State private var localDevVPNInstalled = LocalDevVPN.isInstalled
     @Environment(\.scenePhase) private var scenePhase
@@ -97,6 +98,60 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Button {
+                        showThemeCustomizer = true
+                    } label: {
+                        HStack {
+                            Label("Customize Appearance", systemImage: "paintpalette.fill")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(session.accentTheme.primaryColor)
+                                    .frame(width: 14, height: 14)
+                                Text(session.accentTheme.rawValue.components(separatedBy: " ").first ?? "")
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .font(.subheadline)
+                        }
+                    }
+
+                    Picker("Accent Theme", selection: Binding(
+                        get: { session.accentTheme },
+                        set: { session.setAccentTheme($0) }
+                    )) {
+                        ForEach(AccentColorTheme.allCases) { theme in
+                            Text(theme.rawValue).tag(theme)
+                        }
+                    }
+
+                    Picker("Route Line Thickness", selection: Binding(
+                        get: { session.pathWidth },
+                        set: { session.setPathWidth($0) }
+                    )) {
+                        ForEach(PathWidthPreference.allCases) { width in
+                            Text(width.rawValue).tag(width)
+                        }
+                    }
+
+                    Picker("UI Style", selection: Binding(
+                        get: { session.uiAppearance },
+                        set: { session.setUIAppearance($0) }
+                    )) {
+                        ForEach(UIAppearanceStyle.allCases) { style in
+                            Text(style.rawValue).tag(style)
+                        }
+                    }
+                } header: {
+                    Text("Appearance & UI")
+                } footer: {
+                    Text("Customize the accent color, path thickness, and liquid glass styling across Locus.")
+                }
+
+                Section {
                     Picker("Default Connection Mode", selection: Binding(
                         get: { session.defaultConnectionType },
                         set: { session.setDefaultConnectionType($0) }
@@ -167,6 +222,9 @@ struct SettingsView: View {
             .sheet(isPresented: $showPairOnDevice) {
                 PairOnDeviceView()
                     .environmentObject(pairing)
+            }
+            .sheet(isPresented: $showThemeCustomizer) {
+                ThemeCustomizerSheet(session: session)
             }
             .fullScreenCover(isPresented: $showNameEasterEgg) {
                 LocusEasterEggView()

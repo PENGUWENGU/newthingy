@@ -49,8 +49,12 @@ struct RoutePlannerSheet: View {
         RouteBuilder.totalDistance(of: activePath)
     }
 
+    private var totalStopsDuration: TimeInterval {
+        waypoints.reduce(0) { $0 + $1.stopDuration }
+    }
+
     private var estimatedDuration: TimeInterval {
-        RouteBuilder.estimatedDuration(distance: totalDistance, speed: session.currentSpeedMPS)
+        RouteBuilder.estimatedDuration(distance: totalDistance, speed: session.currentSpeedMPS) + totalStopsDuration
     }
 
     var body: some View {
@@ -141,7 +145,7 @@ struct RoutePlannerSheet: View {
                             ForEach(Array(waypoints.enumerated()), id: \.element.id) { index, wp in
                                 HStack(spacing: 12) {
                                     Circle()
-                                        .fill(badgeColor(for: index, total: waypoints.count))
+                                        .fill(wp.stopDuration > 0 ? Color.orange : badgeColor(for: index, total: waypoints.count))
                                         .frame(width: 24, height: 24)
                                         .overlay {
                                             Text("\(index + 1)")
@@ -150,14 +154,57 @@ struct RoutePlannerSheet: View {
                                         }
 
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(wp.name.isEmpty ? "Waypoint \(index + 1)" : wp.name)
-                                            .font(.subheadline.weight(.medium))
+                                        HStack(spacing: 6) {
+                                            Text(wp.name.isEmpty ? "Waypoint \(index + 1)" : wp.name)
+                                                .font(.subheadline.weight(.medium))
+
+                                            if wp.stopDuration > 0 {
+                                                HStack(spacing: 2) {
+                                                    Image(systemName: "clock.badge.fill")
+                                                    Text(wp.formattedStopDuration)
+                                                }
+                                                .font(.caption2.weight(.bold))
+                                                .foregroundStyle(.orange)
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 1)
+                                                .background(Capsule().fill(Color.orange.opacity(0.18)))
+                                            }
+                                        }
+
                                         Text(String(format: "%.5f, %.5f", wp.coordinate.latitude, wp.coordinate.longitude))
                                             .font(.caption2.monospaced())
                                             .foregroundStyle(.secondary)
                                     }
 
                                     Spacer()
+
+                                    // Stop Duration Preset Menu
+                                    Menu {
+                                        Button("Pass-through (No Stop)") {
+                                            setWaypointStop(at: index, duration: 0)
+                                        }
+                                        Divider()
+                                        Button("15s Stop") {
+                                            setWaypointStop(at: index, duration: 15)
+                                        }
+                                        Button("30s Stop") {
+                                            setWaypointStop(at: index, duration: 30)
+                                        }
+                                        Button("1m Stop") {
+                                            setWaypointStop(at: index, duration: 60)
+                                        }
+                                        Button("2m Stop") {
+                                            setWaypointStop(at: index, duration: 120)
+                                        }
+                                        Button("5m Stop") {
+                                            setWaypointStop(at: index, duration: 300)
+                                        }
+                                    } label: {
+                                        Image(systemName: wp.stopDuration > 0 ? "clock.circle.fill" : "clock")
+                                            .font(.body)
+                                            .foregroundStyle(wp.stopDuration > 0 ? Color.orange : Color.secondary)
+                                            .frame(width: 32, height: 32)
+                                    }
                                 }
                             }
                             .onMove { indices, newOffset in

@@ -109,4 +109,26 @@ final class SavedRouteTests: XCTestCase {
         XCTAssertEqual(loaded.first?.id, route.id)
         XCTAssertEqual(loaded.first?.name, "Test Route")
     }
+
+    func testWaypointStopDurationAndEncoding() throws {
+        let p1 = CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194)
+        let wp1 = RouteWaypoint(coordinate: p1, name: "Stop 1", stopDuration: 45)
+        XCTAssertTrue(wp1.isStop)
+        XCTAssertEqual(wp1.formattedStopDuration, "45s")
+
+        let route = SavedRoute(
+            name: "Route with Stops",
+            method: .points,
+            waypoints: [wp1],
+            coordinates: [p1],
+            distanceMeters: 100
+        )
+
+        let data = try JSONEncoder().encode(route)
+        let decoded = try JSONDecoder().decode(SavedRoute.self, from: data)
+        let decodedWp = decoded.clWaypoints.first
+        XCTAssertNotNil(decodedWp)
+        XCTAssertEqual(decodedWp?.stopDuration, 45)
+        XCTAssertTrue(decodedWp?.isStop == true)
+    }
 }

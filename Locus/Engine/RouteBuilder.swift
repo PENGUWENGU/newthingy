@@ -83,18 +83,42 @@ struct RouteWaypoint: Identifiable, Equatable, Hashable {
     let id: UUID
     var coordinate: CLLocationCoordinate2D
     var name: String
+    var stopDuration: TimeInterval // 0 = normal pass-through waypoint; > 0 = dwell stop in seconds
 
-    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, name: String = "") {
+    init(
+        id: UUID = UUID(),
+        coordinate: CLLocationCoordinate2D,
+        name: String = "",
+        stopDuration: TimeInterval = 0
+    ) {
         self.id = id
         self.coordinate = coordinate
         self.name = name
+        self.stopDuration = stopDuration
+    }
+
+    var isStop: Bool {
+        stopDuration > 0
+    }
+
+    var formattedStopDuration: String {
+        guard stopDuration > 0 else { return "Pass-through" }
+        let secs = Int(stopDuration)
+        if secs < 60 {
+            return "\(secs)s"
+        } else if secs % 60 == 0 {
+            return "\(secs / 60)m"
+        } else {
+            return "\(secs / 60)m \(secs % 60)s"
+        }
     }
 
     static func == (lhs: RouteWaypoint, rhs: RouteWaypoint) -> Bool {
         lhs.id == rhs.id &&
         lhs.coordinate.latitude == rhs.coordinate.latitude &&
         lhs.coordinate.longitude == rhs.coordinate.longitude &&
-        lhs.name == rhs.name
+        lhs.name == rhs.name &&
+        lhs.stopDuration == rhs.stopDuration
     }
 
     func hash(into hasher: inout Hasher) {
@@ -102,6 +126,7 @@ struct RouteWaypoint: Identifiable, Equatable, Hashable {
         hasher.combine(coordinate.latitude)
         hasher.combine(coordinate.longitude)
         hasher.combine(name)
+        hasher.combine(stopDuration)
     }
 }
 
