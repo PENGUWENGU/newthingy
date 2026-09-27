@@ -157,7 +157,8 @@ struct RoutePlannerSheet: View {
                                     Spacer()
 
                                     Button {
-                                        if let first = waypoints.first, waypoints.last != first {
+                                        if let first = waypoints.first, let last = waypoints.last,
+                                           (first.coordinate.latitude != last.coordinate.latitude || first.coordinate.longitude != last.coordinate.longitude) {
                                             waypoints.append(RouteWaypoint(coordinate: first.coordinate, name: "Return to Start"))
                                             calculatedRoute.removeAll()
                                         }
@@ -233,7 +234,8 @@ struct RoutePlannerSheet: View {
                                 .buttonStyle(.bordered)
 
                                 Button {
-                                    if let first = freehandCoordinates.first, freehandCoordinates.last != first {
+                                    if let first = freehandCoordinates.first, let last = freehandCoordinates.last,
+                                       (first.latitude != last.latitude || first.longitude != last.longitude) {
                                         freehandCoordinates.append(first)
                                         onSmoothFreehand()
                                     }

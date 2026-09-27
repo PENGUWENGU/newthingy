@@ -185,7 +185,7 @@ final class PairOnDeviceService: ObservableObject {
         UNUserNotificationCenter.current().add(request)
     }
 
-    private static func runBlockingAccept(outputPath: String, box: PairCallbackBox) {
+    nonisolated private static func runBlockingAccept(outputPath: String, box: PairCallbackBox) {
         let name = "Locus"
         let model = "Mac17,7"
 
