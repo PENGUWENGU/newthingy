@@ -177,7 +177,7 @@ struct BottomControlsView: View {
                 ForEach(TravelMode.allCases) { mode in
                     let selected = session.travelMode == mode
                     Button {
-                        session.travelMode = mode
+                        session.selectTravelMode(mode)
                     } label: {
                         Image(systemName: mode.icon)
                             .font(.body.weight(.semibold))

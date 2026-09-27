@@ -28,6 +28,8 @@ struct MapHomeView: View {
     @State private var showMapSaveRouteAlert = false
     @State private var mapSaveRouteName = ""
     @State private var showThemeSheet = false
+    @State private var isFreehandDrawingMode = true
+    @State private var editingStopWaypointIndex: Int? = nil
     @State private var pathDashPhase: CGFloat = 0
     @State private var puckPulsing = false
     private let pathAnimationTimer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
@@ -127,7 +129,7 @@ struct MapHomeView: View {
                                             removeWaypoint(at: index)
                                         },
                                         onToggleStop: {
-                                            toggleWaypointStop(at: index)
+                                            editingStopWaypointIndex = index
                                         }
                                     )
                                 }
@@ -230,18 +232,17 @@ struct MapHomeView: View {
                         handleMapTap(at: point, proxy: proxy)
                     }
 
-                    // Freehand Drawing Drag Gesture Capture Layer
+                    // Freehand Drawing Touch Overlay: allows 1-finger drawing while passing 2-finger pan/scroll to MKMapView
                     if routeModeActive && routeMethod == .freehand && !session.isFollowingRoute {
-                        Color.black.opacity(0.001)
-                            .gesture(
-                                DragGesture(minimumDistance: 1, coordinateSpace: .local)
-                                    .onChanged { value in
-                                        handleFreehandDrag(at: value.location, proxy: proxy)
-                                    }
-                                    .onEnded { _ in
-                                        handleFreehandDragEnd()
-                                    }
-                            )
+                        FreehandCanvasTouchOverlay(
+                            isDrawingEnabled: isFreehandDrawingMode,
+                            onPoint: { point in
+                                handleFreehandDrag(at: point, proxy: proxy)
+                            },
+                            onEnded: {
+                                handleFreehandDragEnd()
+                            }
+                        )
                     }
                 }
             }
@@ -306,6 +307,20 @@ struct MapHomeView: View {
         }
         .sheet(isPresented: $showThemeSheet) {
             ThemeCustomizerSheet(session: session)
+        }
+        .sheet(isPresented: Binding(
+            get: { editingStopWaypointIndex != nil },
+            set: { if !$0 { editingStopWaypointIndex = nil } }
+        )) {
+            if let idx = editingStopWaypointIndex, waypoints.indices.contains(idx) {
+                StopDurationPickerSheet(
+                    waypointIndex: idx,
+                    waypointName: waypoints[idx].name,
+                    initialDuration: waypoints[idx].stopDuration
+                ) { newDuration in
+                    waypoints[idx].stopDuration = newDuration
+                }
+            }
         }
         .alert("Save Route", isPresented: $showMapSaveRouteAlert) {
             TextField("Route Name", text: $mapSaveRouteName)
@@ -566,7 +581,7 @@ struct MapHomeView: View {
                                 Text("At Stop: \(stopName)")
                                     .font(.caption.weight(.bold))
                                     .foregroundStyle(.primary)
-                                Text("Dwelling • \(Int(ceil(rem)))s remaining")
+                                Text("Dwelling • \(RouteBuilder.formattedDuration(rem)) remaining")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
@@ -747,7 +762,7 @@ struct MapHomeView: View {
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.primary)
                         } else {
-                            Text(freehandCoordinates.isEmpty ? "Drag finger on map to draw" : "Drawn Path • \(RouteBuilder.formattedDistance(totalDist))")
+                            Text(freehandCoordinates.isEmpty ? (isFreehandDrawingMode ? "1 finger draws • 2 fingers scroll" : "Scroll & move map freely") : "Drawn Path • \(RouteBuilder.formattedDistance(totalDist))")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.primary)
                         }
@@ -765,6 +780,27 @@ struct MapHomeView: View {
                     }
 
                     Spacer()
+
+                    if routeMethod == .freehand {
+                        Button {
+                            withAnimation {
+                                isFreehandDrawingMode.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: isFreehandDrawingMode ? "pencil.tip" : "hand.raised.fill")
+                                Text(isFreehandDrawingMode ? "Draw" : "Pan")
+                            }
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(isFreehandDrawingMode ? .black : .primary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(
+                                Capsule().fill(isFreehandDrawingMode ? LocusTheme.accentSecondary : Color.primary.opacity(0.12))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
 
                     if routeMethod == .points && !waypoints.isEmpty {
                         Button {

@@ -30,6 +30,21 @@ struct WaypointPinView: View {
         }
     }
 
+    private var stopLabelText: String {
+        guard stopDuration > 0 else { return "+ Stop" }
+        let total = Int(stopDuration)
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 {
+            return m > 0 ? "\(h)h \(m)m Stop" : "\(h)h Stop"
+        } else if m > 0 {
+            return s > 0 ? "\(m)m \(s)s Stop" : "\(m)m Stop"
+        } else {
+            return "\(s)s Stop"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 4) {
             if isSelected {
@@ -37,8 +52,8 @@ struct WaypointPinView: View {
                     if let onToggleStop {
                         Button(action: onToggleStop) {
                             HStack(spacing: 3) {
-                                Image(systemName: stopDuration > 0 ? "stop.circle.fill" : "clock.arrow.circlepath")
-                                Text(stopDuration > 0 ? "\(Int(stopDuration))s Stop" : "+ Stop")
+                                Image(systemName: stopDuration > 0 ? "clock.badge.fill" : "clock.arrow.circlepath")
+                                Text(stopLabelText)
                             }
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(.white)

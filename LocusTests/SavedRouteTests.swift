@@ -129,6 +129,14 @@ final class SavedRouteTests: XCTestCase {
         let decodedWp = decoded.clWaypoints.first
         XCTAssertNotNil(decodedWp)
         XCTAssertEqual(decodedWp?.stopDuration, 45)
-        XCTAssertTrue(decodedWp?.isStop == true)
+        let wp2 = RouteWaypoint(coordinate: p1, name: "Stop 2", stopDuration: 3665) // 1h 1m 5s
+        XCTAssertTrue(wp2.isStop)
+        XCTAssertEqual(wp2.formattedStopDuration, "1h 1m 5s")
+
+        let wp3 = RouteWaypoint(coordinate: p1, name: "Stop 3", stopDuration: 7200) // 2h
+        XCTAssertEqual(wp3.formattedStopDuration, "2h")
+
+        let wp4 = RouteWaypoint(coordinate: p1, name: "Stop 4", stopDuration: 180) // 3m
+        XCTAssertEqual(wp4.formattedStopDuration, "3m")
     }
 }

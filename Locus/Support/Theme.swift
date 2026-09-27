@@ -10,6 +10,7 @@ enum AccentColorTheme: String, CaseIterable, Identifiable {
     case green = "Emerald Matrix"
     case pink = "Cyberpunk Pink"
     case monochrome = "Monochrome Slate"
+    case custom = "Custom"
 
     var id: String { rawValue }
 
@@ -22,6 +23,8 @@ enum AccentColorTheme: String, CaseIterable, Identifiable {
         case .green: return Color(red: 0.22, green: 0.86, blue: 0.48)
         case .pink: return Color(red: 1.00, green: 0.32, blue: 0.64)
         case .monochrome: return Color(red: 0.92, green: 0.92, blue: 0.94)
+        case .custom:
+            return Color(hex: ThemePreference.customPrimaryHex) ?? Color(red: 0.35, green: 0.78, blue: 0.72)
         }
     }
 
@@ -34,6 +37,8 @@ enum AccentColorTheme: String, CaseIterable, Identifiable {
         case .green: return Color(red: 0.38, green: 0.78, blue: 1.00)
         case .pink: return Color(red: 0.32, green: 0.86, blue: 0.96)
         case .monochrome: return Color(red: 0.60, green: 0.60, blue: 0.65)
+        case .custom:
+            return Color(hex: ThemePreference.customSecondaryHex) ?? Color(red: 0.95, green: 0.55, blue: 0.28)
         }
     }
 
@@ -126,6 +131,27 @@ enum ThemePreference {
         }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: appearanceKey)
+        }
+    }
+
+    static let customPrimaryHexKey = "locus.theme.custom_primary_hex"
+    static let customSecondaryHexKey = "locus.theme.custom_secondary_hex"
+
+    static var customPrimaryHex: String {
+        get {
+            UserDefaults.standard.string(forKey: customPrimaryHexKey) ?? "#59C6B8"
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: customPrimaryHexKey)
+        }
+    }
+
+    static var customSecondaryHex: String {
+        get {
+            UserDefaults.standard.string(forKey: customSecondaryHexKey) ?? "#F28C47"
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: customSecondaryHexKey)
         }
     }
 
@@ -227,5 +253,67 @@ extension View {
 
     func locusGlass(_ style: LocusGlassStyle = .regular, tint: Color? = nil) -> some View {
         locusGlass(style, tint: tint, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
+// MARK: - Color Hex, RGB & HSB Extensions
+
+extension Color {
+    init?(hex: String) {
+        var clean = hex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if clean.hasPrefix("#") {
+            clean.removeFirst()
+        }
+        guard clean.count == 6, let rgb = UInt64(clean, radix: 16) else {
+            return nil
+        }
+        let r = Double((rgb >> 16) & 0xFF) / 255.0
+        let g = Double((rgb >> 8) & 0xFF) / 255.0
+        let b = Double(rgb & 0xFF) / 255.0
+        self.init(red: r, green: g, blue: b)
+    }
+
+    func toHex() -> String {
+        let uiColor = UIColor(self)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard uiColor.getRed(&r, green: &g, blue: &b, alpha: &a) else {
+            return "#59C6B8"
+        }
+        let ri = Int(round(r * 255))
+        let gi = Int(round(g * 255))
+        let bi = Int(round(b * 255))
+        return String(format: "#%02X%02X%02X", ri, gi, bi)
+    }
+
+    func componentsRGB() -> (r: Int, g: Int, b: Int) {
+        let uiColor = UIColor(self)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard uiColor.getRed(&r, green: &g, blue: &b, alpha: &a) else {
+            return (89, 198, 184)
+        }
+        return (Int(round(r * 255)), Int(round(g * 255)), Int(round(b * 255)))
+    }
+
+    func componentsHSB() -> (h: Double, s: Double, b: Double) {
+        let uiColor = UIColor(self)
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard uiColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a) else {
+            return (172, 55, 78)
+        }
+        return (Double(h * 360), Double(s * 100), Double(b * 100))
+    }
+
+    static func fromRGB(r: Int, g: Int, b: Int) -> Color {
+        let rc = Double(max(0, min(255, r))) / 255.0
+        let gc = Double(max(0, min(255, g))) / 255.0
+        let bc = Double(max(0, min(255, b))) / 255.0
+        return Color(red: rc, green: gc, blue: bc)
+    }
+
+    static func fromHSB(h: Double, s: Double, b: Double) -> Color {
+        let hue = max(0, min(360, h)) / 360.0
+        let sat = max(0, min(100, s)) / 100.0
+        let bri = max(0, min(100, b)) / 100.0
+        return Color(hue: hue, saturation: sat, brightness: bri)
     }
 }

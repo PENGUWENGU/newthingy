@@ -103,13 +103,29 @@ struct RouteWaypoint: Identifiable, Equatable, Hashable {
 
     var formattedStopDuration: String {
         guard stopDuration > 0 else { return "Pass-through" }
-        let secs = Int(stopDuration)
-        if secs < 60 {
-            return "\(secs)s"
-        } else if secs % 60 == 0 {
-            return "\(secs / 60)m"
+        let totalSecs = Int(stopDuration)
+        let hours = totalSecs / 3600
+        let minutes = (totalSecs % 3600) / 60
+        let seconds = totalSecs % 60
+
+        if hours > 0 {
+            if minutes > 0 && seconds > 0 {
+                return "\(hours)h \(minutes)m \(seconds)s"
+            } else if minutes > 0 {
+                return "\(hours)h \(minutes)m"
+            } else if seconds > 0 {
+                return "\(hours)h \(seconds)s"
+            } else {
+                return "\(hours)h"
+            }
+        } else if minutes > 0 {
+            if seconds > 0 {
+                return "\(minutes)m \(seconds)s"
+            } else {
+                return "\(minutes)m"
+            }
         } else {
-            return "\(secs / 60)m \(secs % 60)s"
+            return "\(seconds)s"
         }
     }
 

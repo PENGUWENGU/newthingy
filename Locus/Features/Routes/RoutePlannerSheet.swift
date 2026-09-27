@@ -34,6 +34,7 @@ struct RoutePlannerSheet: View {
     @State private var routeToRename: SavedRoute?
     @State private var renameText = ""
     @State private var showRenameAlert = false
+    @State private var editingStopWaypointIndex: Int? = nil
 
     private var activePath: [CLLocationCoordinate2D] {
         if !calculatedRoute.isEmpty {
@@ -149,6 +150,9 @@ struct RoutePlannerSheet: View {
                                     waypoint: wp,
                                     onSetStop: { duration in
                                         setWaypointStop(at: index, duration: duration)
+                                    },
+                                    onEditCustomStop: {
+                                        editingStopWaypointIndex = index
                                     }
                                 )
                             }
@@ -576,6 +580,20 @@ struct RoutePlannerSheet: View {
             } message: {
                 Text("Enter a new name for this saved route.")
             }
+            .sheet(isPresented: Binding(
+                get: { editingStopWaypointIndex != nil },
+                set: { if !$0 { editingStopWaypointIndex = nil } }
+            )) {
+                if let idx = editingStopWaypointIndex, waypoints.indices.contains(idx) {
+                    StopDurationPickerSheet(
+                        waypointIndex: idx,
+                        waypointName: waypoints[idx].name,
+                        initialDuration: waypoints[idx].stopDuration
+                    ) { newDuration in
+                        setWaypointStop(at: idx, duration: newDuration)
+                    }
+                }
+            }
         }
     }
 
@@ -639,6 +657,7 @@ private struct RouteWaypointRowView: View {
     let totalCount: Int
     let waypoint: RouteWaypoint
     let onSetStop: (TimeInterval) -> Void
+    let onEditCustomStop: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -657,15 +676,18 @@ private struct RouteWaypointRowView: View {
                         .font(.subheadline.weight(.medium))
 
                     if waypoint.stopDuration > 0 {
-                        HStack(spacing: 2) {
-                            Image(systemName: "clock.badge.fill")
-                            Text(waypoint.formattedStopDuration)
+                        Button(action: onEditCustomStop) {
+                            HStack(spacing: 2) {
+                                Image(systemName: "clock.badge.fill")
+                                Text(waypoint.formattedStopDuration)
+                            }
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.orange.opacity(0.18)))
                         }
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.orange.opacity(0.18)))
+                        .buttonStyle(.plain)
                     }
                 }
 
@@ -676,12 +698,20 @@ private struct RouteWaypointRowView: View {
 
             Spacer()
 
-            // Stop Duration Preset Menu
+            // Stop Duration Menu
             Menu {
+                Button(action: onEditCustomStop) {
+                    Label("Custom Duration (H / M / S)…", systemImage: "timer")
+                }
+
+                Divider()
+
                 Button("Pass-through (No Stop)") {
                     onSetStop(0)
                 }
+
                 Divider()
+
                 Button("15s Stop") {
                     onSetStop(15)
                 }
@@ -696,6 +726,15 @@ private struct RouteWaypointRowView: View {
                 }
                 Button("5m Stop") {
                     onSetStop(300)
+                }
+                Button("15m Stop") {
+                    onSetStop(900)
+                }
+                Button("30m Stop") {
+                    onSetStop(1800)
+                }
+                Button("1h Stop") {
+                    onSetStop(3600)
                 }
             } label: {
                 Image(systemName: waypoint.stopDuration > 0 ? "clock.circle.fill" : "clock")

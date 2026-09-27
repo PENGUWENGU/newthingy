@@ -103,6 +103,20 @@ final class SpoofSession: ObservableObject {
         ThemePreference.accent = theme
     }
 
+    func setCustomPrimaryHex(_ hex: String) {
+        ThemePreference.customPrimaryHex = hex
+        accentTheme = .custom
+        ThemePreference.accent = .custom
+        objectWillChange.send()
+    }
+
+    func setCustomSecondaryHex(_ hex: String) {
+        ThemePreference.customSecondaryHex = hex
+        accentTheme = .custom
+        ThemePreference.accent = .custom
+        objectWillChange.send()
+    }
+
     func setPathWidth(_ width: PathWidthPreference) {
         pathWidth = width
         ThemePreference.pathWidth = width
@@ -133,6 +147,22 @@ final class SpoofSession: ObservableObject {
         customSpeedMPS ?? travelMode.baseSpeed
     }
 
+    /// Switches travel mode and clears any custom speed override so the new mode's speed is used immediately.
+    func selectTravelMode(_ mode: TravelMode) {
+        travelMode = mode
+        customSpeedMPS = nil
+        SpeedPreference.setCustomSpeed(nil)
+        updateRemainingRouteDuration()
+    }
+
+    /// Recalculates estimated remaining route duration when speed is changed during route playback.
+    func updateRemainingRouteDuration() {
+        guard isFollowingRoute else { return }
+        let travel = RouteBuilder.estimatedDuration(distance: remainingRouteDistance, speed: currentSpeedMPS)
+        let dwellLeft = activeStopRemainingSeconds ?? 0
+        remainingRouteDuration = travel + dwellLeft
+    }
+
     /// Validates and applies a custom speed typed by the user (see `SpeedInput`),
     /// persisting it so it survives relaunch. Safe to call while the joystick is
     /// active — it only changes the value `tickJoystick` reads next tick.
@@ -142,6 +172,7 @@ final class SpoofSession: ObservableObject {
         guard let value = SpeedInput.parse(text) else { return false }
         customSpeedMPS = value
         SpeedPreference.setCustomSpeed(value)
+        updateRemainingRouteDuration()
         return true
     }
 
@@ -149,6 +180,7 @@ final class SpoofSession: ObservableObject {
     func clearCustomSpeed() {
         customSpeedMPS = nil
         SpeedPreference.setCustomSpeed(nil)
+        updateRemainingRouteDuration()
     }
 
     func teleport(to coordinate: CLLocationCoordinate2D, pairing: PairingStore) {
@@ -328,36 +360,29 @@ final class SpoofSession: ObservableObject {
 
                     let segDist = CLLocation(latitude: previous.latitude, longitude: previous.longitude)
                         .distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude))
-                    let speedMPS = self.currentSpeedMPS
-                    var speed = speedMPS * Double.random(in: 0.88...1.12)
-                    speed = max(0.8, speed)
-                    let stepMeters: CLLocationDistance = min(12, max(4, speed * 0.5))
-                    let steps = max(1, Int(ceil(segDist / stepMeters)))
+                    var distanceInSegment: CLLocationDistance = 0.0
 
-                    for i in 1...steps {
-                        if Task.isCancelled { break }
-
-                        // Pause gate during steps
+                    while distanceInSegment < segDist && !Task.isCancelled {
+                        // Pause gate during traversal
                         while self.isRoutePaused && !Task.isCancelled {
-                            try? await Task.sleep(nanoseconds: 200_000_000)
+                            try? await Task.sleep(nanoseconds: 100_000_000)
                         }
                         if Task.isCancelled { break }
 
-                        let t = Double(i) / Double(steps)
+                        // Dynamic live speed read on every tick: immediately responds to speed changes
+                        let speedMPS = self.currentSpeedMPS
+                        let liveSpeed = max(0.5, speedMPS * Double.random(in: 0.95...1.05))
+                        let dt: TimeInterval = 0.25
+                        let stepDist = max(0.1, liveSpeed * dt)
+                        distanceInSegment = min(segDist, distanceInSegment + stepDist)
+
+                        let t = segDist > 0 ? (distanceInSegment / segDist) : 1.0
                         let coord = CLLocationCoordinate2D(
                             latitude: previous.latitude + (next.latitude - previous.latitude) * t,
                             longitude: previous.longitude + (next.longitude - previous.longitude) * t
                         )
-                        let delay = stepMeters / speed
-                        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
 
-                        // Pause gate after sleeping
-                        while self.isRoutePaused && !Task.isCancelled {
-                            try? await Task.sleep(nanoseconds: 200_000_000)
-                        }
-                        if Task.isCancelled { break }
-
-                        let remainingInSegment = segDist * (1.0 - t)
+                        let remainingInSegment = max(0, segDist - distanceInSegment)
                         let remainingDistance = remainingInSegment + suffixDistances[idx + 1]
                         let remainingTravel = RouteBuilder.estimatedDuration(distance: remainingDistance, speed: self.currentSpeedMPS)
                         let remainingStops = pendingStops.reduce(0) { $0 + $1.stopDuration }
@@ -368,11 +393,14 @@ final class SpoofSession: ObservableObject {
 
                         await MainActor.run {
                             self.apply(coord, pairing: pairing, markRecent: false)
+                            self.routeProgress = min(1.0, max(0.0, 1.0 - (remainingDistance / max(1.0, totalRouteDistance))))
                             self.remainingRouteDistance = remainingDistance
                             self.remainingRouteDuration = remainingTravel + remainingStops
                             self.completedRouteCoordinates = completedSlice
                             self.remainingRouteCoordinates = remainingSlice
                         }
+
+                        try? await Task.sleep(nanoseconds: UInt64(dt * 1_000_000_000))
                     }
 
                     await MainActor.run {
