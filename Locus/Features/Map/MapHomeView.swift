@@ -156,7 +156,7 @@ struct MapHomeView: View {
             session.effectiveCompletionFlashColor
                 .opacity(0.35)
                 .ignoresSafeArea()
-                .transition(.opacity.animation(.easeInOut(duration: 0.35)))
+                .transition(.opacity)
                 .allowsHitTesting(false)
         }
     }
