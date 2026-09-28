@@ -712,7 +712,6 @@ final class SpoofSession: ObservableObject {
         if diff > 180 { diff = 360 - diff }
         return diff > 28.0
     }
-    }
 
     /// Dynamically updates the active route when waypoints or path is modified during execution or pause
     func updateActiveRoute(
