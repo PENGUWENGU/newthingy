@@ -70,6 +70,7 @@ struct MapHomeView: View {
             topChrome
             completionFlashOverlay
             favoriteCelebrationOverlay
+            routeCompletionCelebrationOverlay
         }
         .onAppear(perform: handleOnAppear)
         .onChange(of: session.defaultConnectionType, handleDefaultConnectionTypeChange)
@@ -152,10 +153,10 @@ struct MapHomeView: View {
     @ViewBuilder
     private var completionFlashOverlay: some View {
         if session.routeFinishedFlash {
-            ThemePreference.completionFlashColor
-                .opacity(0.4)
+            session.effectiveCompletionFlashColor
+                .opacity(0.35)
                 .ignoresSafeArea()
-                .transition(.opacity)
+                .transition(.opacity.animation(.easeInOut(duration: 0.35)))
                 .allowsHitTesting(false)
         }
     }
@@ -179,6 +180,98 @@ struct MapHomeView: View {
                 .transition(.scale.combined(with: .opacity))
                 .padding(.bottom, 100)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var routeCompletionCelebrationOverlay: some View {
+        if let stats = session.routeCompletionSummary {
+            ZStack {
+                Color.black.opacity(0.45)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        session.dismissCompletionSummary()
+                    }
+
+                VStack(spacing: 16) {
+                    ZStack {
+                        Circle()
+                            .fill(LocusTheme.statusGood.opacity(0.2))
+                            .frame(width: 64, height: 64)
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 38, weight: .bold))
+                            .foregroundStyle(LocusTheme.statusGood)
+                    }
+
+                    VStack(spacing: 4) {
+                        Text("Route Completed!")
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(LocusTheme.textColor)
+                        Text(stats.destinationName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(LocusTheme.textColor.opacity(0.8))
+                    }
+
+                    HStack(spacing: 20) {
+                        VStack(spacing: 2) {
+                            Text("Distance")
+                                .font(.caption2)
+                                .foregroundStyle(LocusTheme.textColor.opacity(0.7))
+                            Text(stats.formattedDistance)
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(LocusTheme.textColor)
+                        }
+
+                        Divider()
+                            .frame(height: 24)
+
+                        VStack(spacing: 2) {
+                            Text("Duration")
+                                .font(.caption2)
+                                .foregroundStyle(LocusTheme.textColor.opacity(0.7))
+                            Text(stats.formattedDuration)
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(LocusTheme.textColor)
+                        }
+
+                        if stats.stopsVisited > 0 {
+                            Divider()
+                                .frame(height: 24)
+
+                            VStack(spacing: 2) {
+                                Text("Stops")
+                                    .font(.caption2)
+                                    .foregroundStyle(LocusTheme.textColor.opacity(0.7))
+                                Text("\(stats.stopsVisited)")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(LocusTheme.textColor)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 14).fill(Color.primary.opacity(0.06)))
+
+                    Button {
+                        session.dismissCompletionSummary()
+                    } label: {
+                        Text("Done")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(.black)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Capsule().fill(LocusTheme.accent))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(24)
+                .frame(maxWidth: 320)
+                .locusGlass(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .shadow(color: Color.black.opacity(0.4), radius: 24, y: 12)
+                .transition(.scale(scale: 0.9).combined(with: .opacity))
+            }
+            .animation(.spring(response: 0.35, dampingFraction: 0.75), value: session.routeCompletionSummary != nil)
+            .zIndex(100)
         }
     }
 
@@ -342,6 +435,7 @@ struct MapHomeView: View {
     // MARK: - Route Operations
 
     private func addWaypoint(_ coord: CLLocationCoordinate2D) {
+        SoundManager.play(.tap)
         let name = "Waypoint \(waypoints.count + 1)"
         waypoints.append(RouteWaypoint(coordinate: coord, name: name))
         importedGPXTrack = nil
@@ -356,6 +450,7 @@ struct MapHomeView: View {
 
     private func removeWaypoint(at index: Int) {
         guard index < waypoints.count else { return }
+        SoundManager.play(.alert)
         waypoints.remove(at: index)
         selectedWaypointId = nil
         if waypoints.count >= 2 {
@@ -371,6 +466,7 @@ struct MapHomeView: View {
 
     private func toggleWaypointStop(at index: Int) {
         guard index < waypoints.count else { return }
+        SoundManager.play(.dwell)
         let current = waypoints[index].stopDuration
         let next: TimeInterval
         if current == 0 {
@@ -670,6 +766,7 @@ struct MapHomeView: View {
 
             if routeMethod == .points && !waypoints.isEmpty {
                 Button {
+                    SoundManager.play(.tap)
                     waypoints.removeLast()
                     if waypoints.count >= 2 {
                         buildPointsRoute()
@@ -682,20 +779,35 @@ struct MapHomeView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-            }
+                .accessibilityLabel("Undo Last Point")
 
-            if routeMethod == .freehand && !freehandCoordinates.isEmpty {
                 Button {
+                    SoundManager.play(.trash)
                     clearAllRouteData()
                 } label: {
                     Image(systemName: "trash.circle.fill")
                         .font(.body)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(LocusTheme.danger.opacity(0.85))
+                .accessibilityLabel("Delete All Points")
+            }
+
+            if routeMethod == .freehand && !freehandCoordinates.isEmpty {
+                Button {
+                    SoundManager.play(.trash)
+                    clearAllRouteData()
+                } label: {
+                    Image(systemName: "trash.circle.fill")
+                        .font(.body)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LocusTheme.danger.opacity(0.85))
+                .accessibilityLabel("Delete Drawn Route")
             }
 
             Button {
+                SoundManager.play(.tap)
                 showRouteSheet = true
             } label: {
                 Image(systemName: "slider.horizontal.3")

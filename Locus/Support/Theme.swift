@@ -157,7 +157,11 @@ enum ThemePreference {
 
     static let customGlassTintEnabledKey = "locus.theme.custom_glass_tint_enabled"
     static let customGlassTintHexKey = "locus.theme.custom_glass_tint_hex"
+    static let customMenuTintEnabledKey = "locus.theme.custom_menu_tint_enabled"
+    static let customMenuTintHexKey = "locus.theme.custom_menu_tint_hex"
     static let customCompletionFlashHexKey = "locus.theme.completion_flash_hex"
+    static let customTextColorEnabledKey = "locus.theme.custom_text_color_enabled"
+    static let customTextColorHexKey = "locus.theme.custom_text_color_hex"
 
     static var isGlassTintEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: customGlassTintEnabledKey) }
@@ -184,8 +188,40 @@ enum ThemePreference {
         return Color(hex: customGlassTintHex)
     }
 
+    static var isMenuTintEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: customMenuTintEnabledKey) }
+        set { UserDefaults.standard.set(newValue, forKey: customMenuTintEnabledKey) }
+    }
+
+    static var customMenuTintHex: String {
+        get { UserDefaults.standard.string(forKey: customMenuTintHexKey) ?? "#182030" }
+        set { UserDefaults.standard.set(newValue, forKey: customMenuTintHexKey) }
+    }
+
+    static var menuTintColor: Color? {
+        guard isMenuTintEnabled else { return glassTintColor }
+        return Color(hex: customMenuTintHex)
+    }
+
+    static var isCustomTextColorEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: customTextColorEnabledKey) }
+        set { UserDefaults.standard.set(newValue, forKey: customTextColorEnabledKey) }
+    }
+
+    static var customTextColorHex: String {
+        get { UserDefaults.standard.string(forKey: customTextColorHexKey) ?? "#FFFFFF" }
+        set { UserDefaults.standard.set(newValue, forKey: customTextColorHexKey) }
+    }
+
+    static var textColor: Color {
+        if isCustomTextColorEnabled, let color = Color(hex: customTextColorHex) {
+            return color
+        }
+        return .primary
+    }
+
     static var customCompletionFlashHex: String {
-        get { UserDefaults.standard.string(forKey: customCompletionFlashHexKey) ?? "" }
+        get { UserDefaults.standard.string(forKey: customCompletionFlashHexKey) ?? "#34D399" }
         set { UserDefaults.standard.set(newValue, forKey: customCompletionFlashHexKey) }
     }
 
@@ -199,7 +235,7 @@ enum ThemePreference {
         if !hex.isEmpty, let color = Color(hex: hex) {
             return color
         }
-        return LocusTheme.accent
+        return Color(red: 0.20, green: 0.83, blue: 0.60) // emerald green default
     }
 
     static var showWaypointLabels: Bool {
@@ -224,6 +260,10 @@ enum LocusTheme {
 
     static var accentSecondary: Color {
         ThemePreference.accent.secondaryColor
+    }
+
+    static var textColor: Color {
+        ThemePreference.textColor
     }
 
     static var danger: Color {

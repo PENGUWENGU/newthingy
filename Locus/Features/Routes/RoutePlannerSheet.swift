@@ -111,24 +111,7 @@ struct RoutePlannerSheet: View {
                                 Text("\(waypoints.count) waypoint\(waypoints.count == 1 ? "" : "s") added")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
-
                                 Spacer()
-
-                                Button(role: .destructive) {
-                                    SoundManager.play(.alert)
-                                    withAnimation {
-                                        waypoints.removeAll()
-                                        calculatedRoute.removeAll()
-                                        if session.isFollowingRoute {
-                                            session.stopRoute()
-                                        }
-                                    }
-                                } label: {
-                                    Label("Delete All Points", systemImage: "trash")
-                                        .font(.subheadline.weight(.medium))
-                                }
-                                .buttonStyle(.bordered)
-                                .tint(.red)
                             }
                             .padding(.vertical, 2)
                         } else {

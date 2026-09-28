@@ -7,8 +7,10 @@ struct ThemeCustomizerSheet: View {
     enum CustomTarget: String, CaseIterable, Identifiable {
         case primary = "Primary Accent"
         case secondary = "Secondary Accent"
-        case glassTint = "Glass Tint"
-        case completionFlash = "Route Complete Flash"
+        case textColor = "Text Color"
+        case menuTint = "Menu Tint"
+        case glassTint = "Background Tint"
+        case completionFlash = "Route Flash"
         var id: String { rawValue }
     }
 
@@ -98,8 +100,11 @@ struct ThemeCustomizerSheet: View {
                 HStack(spacing: 14) {
                     ForEach(AccentColorTheme.allCases) { theme in
                         Button {
+                            SoundManager.play(.toggle)
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                                 session.setAccentTheme(theme)
+                                session.themeVersion += 1
+                                session.objectWillChange.send()
                                 loadCurrentColors()
                             }
                         } label: {
@@ -438,8 +443,10 @@ struct ThemeCustomizerSheet: View {
         switch customTarget {
         case .primary: return ThemePreference.customPrimaryHex
         case .secondary: return ThemePreference.customSecondaryHex
-        case .glassTint: return ThemePreference.glassTintHex
-        case .completionFlash: return ThemePreference.completionFlashHex
+        case .textColor: return ThemePreference.customTextColorHex
+        case .menuTint: return ThemePreference.customMenuTintHex
+        case .glassTint: return ThemePreference.customGlassTintHex
+        case .completionFlash: return ThemePreference.customCompletionFlashHex
         }
     }
 
@@ -448,8 +455,10 @@ struct ThemeCustomizerSheet: View {
             switch customTarget {
             case .primary: return Color(red: 0.35, green: 0.78, blue: 0.72)
             case .secondary: return Color(red: 0.95, green: 0.55, blue: 0.28)
-            case .glassTint: return Color(red: 0.35, green: 0.78, blue: 0.72)
-            case .completionFlash: return Color.green
+            case .textColor: return Color.white
+            case .menuTint: return Color(red: 0.10, green: 0.14, blue: 0.22)
+            case .glassTint: return Color(red: 0.08, green: 0.10, blue: 0.15)
+            case .completionFlash: return Color(red: 0.20, green: 0.83, blue: 0.60)
             }
         }()
     }
@@ -476,14 +485,17 @@ struct ThemeCustomizerSheet: View {
     private func applyTargetHex(_ hex: String) {
         switch customTarget {
         case .primary:
-            session.setCustomPrimaryHex(hex)
+            session.updateCustomColors(primaryHex: hex)
         case .secondary:
-            session.setCustomSecondaryHex(hex)
+            session.updateCustomColors(secondaryHex: hex)
+        case .textColor:
+            session.updateCustomColors(textColorHex: hex)
+        case .menuTint:
+            session.updateCustomColors(menuTintHex: hex)
         case .glassTint:
-            ThemePreference.glassTintHex = hex
-            ThemePreference.hasCustomGlassTint = true
+            session.updateCustomColors(glassTintHex: hex)
         case .completionFlash:
-            ThemePreference.completionFlashHex = hex
+            session.updateCustomColors(flashHex: hex)
         }
     }
 

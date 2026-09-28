@@ -41,6 +41,10 @@ enum TravelMode: String, CaseIterable, Identifiable {
         }
     }
 
+    var defaultSpeedMPS: CLLocationSpeed {
+        baseSpeed
+    }
+
     var mkTransportType: MKDirectionsTransportType {
         switch self {
         case .walk, .sidewalk, .run: return .walking
@@ -49,45 +53,77 @@ enum TravelMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// Validates and normalizes user-entered custom movement speeds.
-///
-/// This is the single gatekeeper for turning raw text from a text field into a safe,
-/// finite `CLLocationSpeed` (meters per second). Nothing outside this type should
-/// attempt to parse a speed string.
-enum SpeedInput {
-    /// Floor for a custom speed. Anything at or below this is treated as invalid rather
-    /// than silently clamped, since a near-zero or negative speed isn't a meaningful
-    /// movement rate.
-    static let minimumMetersPerSecond: Double = 0.05
-    /// Generous ceiling so the control stays usable for testing/dev scenarios far outside
-    /// walk/run/cycle/drive, without allowing a stray keystroke to produce an unusable value.
-    static let maximumMetersPerSecond: Double = 1000
+/// Preferred speed display & input units (mph, km/h, m/s).
+enum SpeedUnit: String, CaseIterable, Identifiable {
+    case mph = "mph"
+    case kmh = "km/h"
+    case mps = "m/s"
 
-    /// Parses free-form text into a safe custom speed in meters per second.
-    ///
-    /// Returns `nil` for anything that isn't a genuine positive, finite number: empty
-    /// input, non-numeric text, `NaN`, `+Infinity`/`-Infinity`, or a value `<= 0`.
-    /// A value that parses fine but falls outside the practical range is clamped rather
-    /// than rejected, since the input itself was well-formed.
-    static func parse(_ text: String) -> Double? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        // Tolerate a comma decimal separator (common outside en-US locales) in addition
-        // to a period, without affecting normal parsing of plain integers/decimals.
-        let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
-        guard let value = Double(normalized) else { return nil }
-        guard value.isFinite, !value.isNaN, value > 0 else { return nil }
-        return min(max(value, minimumMetersPerSecond), maximumMetersPerSecond)
+    var id: String { rawValue }
+
+    var label: String { rawValue }
+
+    /// Converts a value in this unit to meters per second.
+    func toMPS(_ value: Double) -> Double {
+        switch self {
+        case .mph: return value / 2.236936
+        case .kmh: return value / 3.6
+        case .mps: return value
+        }
+    }
+
+    /// Converts meters per second into this unit.
+    func fromMPS(_ mps: Double) -> Double {
+        switch self {
+        case .mph: return mps * 2.236936
+        case .kmh: return mps * 3.6
+        case .mps: return mps
+        }
+    }
+
+    /// Formats speed for display with 1 decimal place and unit suffix.
+    func format(_ mps: Double) -> String {
+        let val = fromMPS(mps)
+        return String(format: "%.1f %@", val, rawValue)
     }
 }
 
-/// Persists the user's custom speed override the same way the rest of Locus persists
-/// simple settings (see `TunnelConfig`): a plain `UserDefaults`-backed namespace.
+/// Validates and normalizes user-entered custom movement speeds.
+enum SpeedInput {
+    static let minimumMetersPerSecond: Double = 0.05
+    static let maximumMetersPerSecond: Double = 1000
+
+    /// Parses text into meters per second using the specified or default unit.
+    static func parse(_ text: String, unit: SpeedUnit = .mps) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
+        guard let value = Double(normalized) else { return nil }
+        guard value.isFinite, !value.isNaN, value > 0 else { return nil }
+        let mps = unit.toMPS(value)
+        return min(max(mps, minimumMetersPerSecond), maximumMetersPerSecond)
+    }
+}
+
+/// Persists the user's custom speed and preferred speed unit.
 enum SpeedPreference {
     static let valueKey = "locus.customSpeedMPS"
     static let enabledKey = "locus.customSpeedEnabled"
+    static let unitKey = "locus.speedUnit"
 
-    /// The stored custom speed, or `nil` if no override is currently enabled/saved.
+    static var preferredUnit: SpeedUnit {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: unitKey),
+                  let unit = SpeedUnit(rawValue: raw) else {
+                return .mph // Default to mph
+            }
+            return unit
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: unitKey)
+        }
+    }
+
     static var storedValue: Double? {
         guard UserDefaults.standard.bool(forKey: enabledKey) else { return nil }
         let raw = UserDefaults.standard.double(forKey: valueKey)
@@ -95,8 +131,6 @@ enum SpeedPreference {
         return raw
     }
 
-    /// Saves a validated custom speed, or pass `nil` to disable the override and fall
-    /// back to the selected travel mode's preset speed.
     static func setCustomSpeed(_ value: Double?) {
         if let value, value.isFinite, value > 0 {
             UserDefaults.standard.set(value, forKey: valueKey)

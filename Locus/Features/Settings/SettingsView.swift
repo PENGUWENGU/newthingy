@@ -157,6 +157,29 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Picker("Speed Unit", selection: Binding(
+                        get: { session.speedUnit },
+                        set: {
+                            SoundManager.play(.toggle)
+                            session.setSpeedUnit($0)
+                        }
+                    )) {
+                        ForEach(SpeedUnit.allCases) { u in
+                            Text(u.label).tag(u)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Toggle("Smart Traffic Lights", isOn: $session.smartTrafficLights)
+                    Toggle("Smart Transit Bus Stops", isOn: $session.busModeSmartStops)
+                    Toggle("Route Completion Notification", isOn: $session.routeNotificationsEnabled)
+                } header: {
+                    Text("Movement & Smart Simulation")
+                } footer: {
+                    Text("When Smart Traffic Lights is enabled, cars only pause at detected street intersections. When disabled or on uninterrupted roads, movement never pauses.")
+                }
+
+                Section {
                     Picker("Default Connection Mode", selection: Binding(
                         get: { session.defaultConnectionType },
                         set: { session.setDefaultConnectionType($0) }

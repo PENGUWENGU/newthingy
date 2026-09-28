@@ -5,8 +5,10 @@ enum SoundEffect {
     case tap        // System sound 1104 (tock / subtle tap)
     case toggle     // System sound 1105 (pop)
     case success    // System sound 1054 (chime / success)
-    case alert      // System sound 1053 (warning / delete)
-    case dwell      // System sound 1057 (soft knock)
+    case alert      // System sound 1053 (warning / cancel)
+    case dwell      // System sound 1057 (soft knock / waypoint dwell)
+    case trash      // System sound 1051 (empty trash / delete points)
+    case teleport   // System sound 1109 (whoosh / teleport jump)
 }
 
 final class SoundManager {
@@ -36,6 +38,8 @@ final class SoundManager {
         case .success: soundID = 1054
         case .alert: soundID = 1053
         case .dwell: soundID = 1057
+        case .trash: soundID = 1051
+        case .teleport: soundID = 1109
         }
         AudioServicesPlaySystemSound(soundID)
     }

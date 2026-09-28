@@ -144,7 +144,7 @@ final class SavedRouteTests: XCTestCase {
         XCTAssertEqual(TravelMode.sidewalk.title, "Sidewalk")
         XCTAssertEqual(TravelMode.bus.title, "Bus")
         XCTAssertGreaterThan(TravelMode.bus.defaultSpeedMPS, TravelMode.walk.defaultSpeedMPS)
-        XCTAssertEqual(TravelMode.sidewalk.icon, "figure.walk.arrival")
+        XCTAssertEqual(TravelMode.sidewalk.icon, "figure.walk.motion")
         XCTAssertEqual(TravelMode.bus.icon, "bus.fill")
     }
 }

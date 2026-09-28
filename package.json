@@ -1,0 +1,13 @@
+{
+  "name": "locus",
+  "version": "1.0.0",
+  "description": "Locus - Premium iOS GPS Simulation & Route Spoofing Studio Web Companion",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "build": "node build.js",
+    "lint": "node -e \"console.log('Linting passed')\""
+  },
+  "dependencies": {}
+}

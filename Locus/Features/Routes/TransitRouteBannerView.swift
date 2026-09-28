@@ -1,6 +1,7 @@
 import SwiftUI
 import CoreLocation
 
+/// Unified Live Activity style Route HUD matching Locus Liquid Glass design system.
 struct TransitRouteBannerView: View {
     @ObservedObject var session: SpoofSession
     var onTogglePause: (() -> Void)? = nil
@@ -45,39 +46,38 @@ struct TransitRouteBannerView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Main Apple Transit Live Card matching IMG_2247
+        VStack(spacing: 8) {
+            // Live Route Activity Card
             VStack(alignment: .leading, spacing: 10) {
                 // Header Row
                 HStack(alignment: .center, spacing: 10) {
-                    // Transit Icon & Status
                     ZStack {
                         Circle()
-                            .fill(Color.orange.opacity(0.22))
+                            .fill(LocusTheme.accent.opacity(0.18))
                             .frame(width: 38, height: 38)
                         Image(systemName: headerIconName)
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(Color.orange)
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(LocusTheme.accent)
                     }
 
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
                             Text(headerTitle)
-                                .font(.system(size: 17, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white)
+                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                                .foregroundStyle(LocusTheme.textColor)
 
                             if session.isRoutePaused {
                                 Text("PAUSED")
                                     .font(.system(size: 10, weight: .black))
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
-                                    .background(Capsule().fill(Color.yellow.opacity(0.85)))
+                                    .background(Capsule().fill(Color.orange.opacity(0.85)))
                                     .foregroundStyle(.black)
                             }
                         }
 
                         HStack(spacing: 6) {
-                            // Line / Mode Badge
+                            // Travel Mode Badge
                             HStack(spacing: 3) {
                                 Image(systemName: session.travelMode.icon)
                                     .font(.system(size: 10, weight: .bold))
@@ -86,54 +86,54 @@ struct TransitRouteBannerView: View {
                             }
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(RoundedRectangle(cornerRadius: 5).fill(Color.orange))
+                            .background(RoundedRectangle(cornerRadius: 6).fill(LocusTheme.accent))
                             .foregroundStyle(.black)
 
                             Text(subHeaderDetail)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(Color.white.opacity(0.85))
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(LocusTheme.textColor.opacity(0.8))
                         }
                     }
 
                     Spacer()
 
-                    // Quick Collapse / Expand chevron
+                    // Quick Collapse / Expand
                     Button {
                         SoundManager.play(.tap)
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) {
                             isCollapsed.toggle()
                         }
                     } label: {
                         Image(systemName: isCollapsed ? "chevron.down.circle.fill" : "chevron.up.circle.fill")
                             .font(.title3)
-                            .foregroundStyle(Color.white.opacity(0.6))
+                            .foregroundStyle(LocusTheme.textColor.opacity(0.6))
                     }
                     .buttonStyle(.plain)
                 }
 
-                // Dwell Stop Active Banner (Scheduled Stop, Red Light, or Bus Stop)
+                // Dwell Stop Active Banner
                 if let stopName = session.activeStopName, let seconds = session.activeStopRemainingSeconds {
                     HStack(spacing: 8) {
                         Image(systemName: session.isTrafficLightStopActive ? "trafficlight.fill" : (session.isBusStopActive ? "bus.fill" : "clock.badge.fill"))
                             .font(.subheadline)
-                            .foregroundStyle(Color.orange)
+                            .foregroundStyle(LocusTheme.accentSecondary)
 
                         VStack(alignment: .leading, spacing: 1) {
                             Text(stopName)
                                 .font(.caption.weight(.bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(LocusTheme.textColor)
                             Text("Dwelling • \(Int(ceil(seconds)))s remaining")
                                 .font(.caption2)
-                                .foregroundStyle(Color.white.opacity(0.8))
+                                .foregroundStyle(LocusTheme.textColor.opacity(0.75))
                         }
 
                         Spacer()
 
                         Button {
+                            SoundManager.play(.toggle)
                             if let onSkipStop {
                                 onSkipStop()
                             } else {
-                                SoundManager.play(.toggle)
                                 session.skipCurrentStop()
                             }
                         } label: {
@@ -145,101 +145,96 @@ struct TransitRouteBannerView: View {
                             .foregroundStyle(.black)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)
-                            .background(Capsule().fill(Color.orange))
+                            .background(Capsule().fill(LocusTheme.accentSecondary))
                         }
                         .buttonStyle(.plain)
                     }
                     .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.18)))
+                    .background(RoundedRectangle(cornerRadius: 12).fill(LocusTheme.accentSecondary.opacity(0.12)))
                 }
 
                 if !isCollapsed {
-                    // Apple Maps Transit Progress Track Bar
-                    VStack(spacing: 6) {
+                    // Route Progress Bar
+                    VStack(spacing: 4) {
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
-                                // Background Bar
                                 Capsule()
-                                    .fill(Color.white.opacity(0.18))
+                                    .fill(Color.primary.opacity(0.12))
                                     .frame(height: 6)
 
-                                // Active Filled Segment
                                 Capsule()
                                     .fill(
                                         LinearGradient(
-                                            colors: [Color.orange, LocusTheme.accent],
+                                            colors: [LocusTheme.accent, LocusTheme.accentSecondary],
                                             startPoint: .leading,
                                             endPoint: .trailing
                                         )
                                     )
                                     .frame(width: max(8, geo.size.width * CGFloat(session.routeProgress)), height: 6)
 
-                                // Moving Head Dot
                                 Circle()
                                     .fill(Color.white)
                                     .frame(width: 12, height: 12)
-                                    .shadow(color: .orange.opacity(0.8), radius: 4)
+                                    .shadow(color: LocusTheme.accent.opacity(0.8), radius: 4)
                                     .offset(x: max(0, min(geo.size.width - 12, (geo.size.width * CGFloat(session.routeProgress)) - 6)))
                             }
                         }
                         .frame(height: 12)
                     }
 
-                    // Bottom Destination & Duration Line (matching IMG_2247)
+                    // ETA & Duration Line
                     HStack(alignment: .center) {
-                        HStack(spacing: 5) {
+                        HStack(spacing: 4) {
                             Image(systemName: "mappin.circle.fill")
                                 .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(Color.orange)
+                                .foregroundStyle(LocusTheme.accent)
                             Text("Arrive at \(arrivalTimeString)")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(LocusTheme.textColor)
                         }
 
                         Spacer()
 
                         Text(remainingDurationString)
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(.white)
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(LocusTheme.accent)
                     }
 
-                    Divider()
-                        .background(Color.white.opacity(0.15))
-                        .padding(.vertical, 2)
+                    Divider().opacity(0.2)
 
-                    // Control Buttons: Pause/Resume, Stop Route (with confirmation)
-                    HStack(spacing: 12) {
+                    // Control Buttons
+                    HStack(spacing: 10) {
                         Button {
+                            SoundManager.play(.toggle)
                             if let onTogglePause {
                                 onTogglePause()
                             } else {
-                                SoundManager.play(.toggle)
                                 withAnimation {
                                     session.togglePauseRoute()
                                 }
                             }
                         } label: {
-                            HStack(spacing: 5) {
+                            HStack(spacing: 4) {
                                 Image(systemName: session.isRoutePaused ? "play.fill" : "pause.fill")
                                 Text(session.isRoutePaused ? "Resume" : "Pause")
                             }
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(LocusTheme.textColor)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.15)))
+                            .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.08)))
                         }
                         .buttonStyle(.plain)
 
                         Button {
+                            SoundManager.play(.alert)
                             if let onStop {
                                 onStop()
                             } else {
-                                SoundManager.play(.alert)
                                 session.stopRoute()
                             }
                         } label: {
-                            HStack(spacing: 5) {
+                            HStack(spacing: 4) {
                                 Image(systemName: "stop.fill")
                                 Text("End Route")
                             }
@@ -247,31 +242,23 @@ struct TransitRouteBannerView: View {
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(Color.red.opacity(0.75)))
+                            .background(RoundedRectangle(cornerRadius: 10).fill(LocusTheme.danger.opacity(0.85)))
                         }
                         .buttonStyle(.plain)
                     }
                 }
             }
             .padding(14)
-            .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(Color(red: 0.16, green: 0.08, blue: 0.04).opacity(0.94))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .stroke(Color.orange.opacity(0.35), lineWidth: 1.2)
-                    )
-                    .shadow(color: .black.opacity(0.4), radius: 16, y: 8)
-            )
+            .locusGlass(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
-        .padding(.horizontal, 14)
     }
 
     private var headerIconName: String {
         if session.activeStopName != nil {
             return "clock.badge.fill"
         }
-        return "clock.fill"
+        return "location.north.line.fill"
     }
 
     private var headerTitle: String {
@@ -286,7 +273,7 @@ struct TransitRouteBannerView: View {
     }
 
     private var subHeaderDetail: String {
-        let speedText = String(format: "%.1f mph", session.currentSpeedMPS * 2.23694)
+        let speedText = session.speedUnit.format(session.currentSpeedMPS)
         let distText = RouteBuilder.formattedDistance(session.remainingRouteDistance)
         return "\(distText) left • \(speedText)"
     }

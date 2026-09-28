@@ -31,16 +31,41 @@ enum SpoofStatus: Equatable {
     }
 }
 
+/// Statistics for a completed route to display in the post-route celebration card.
+struct RouteCompletionStats: Identifiable {
+    let id = UUID()
+    let destinationName: String
+    let totalDistanceMeters: CLLocationDistance
+    let durationSeconds: TimeInterval
+    let stopsVisited: Int
+
+    var formattedDistance: String {
+        RouteBuilder.formattedDistance(totalDistanceMeters)
+    }
+
+    var formattedDuration: String {
+        let total = Int(durationSeconds)
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        } else if minutes > 0 {
+            return "\(minutes)m \(seconds)s"
+        } else {
+            return "\(seconds)s"
+        }
+    }
+}
+
 @MainActor
 final class SpoofSession: ObservableObject {
     @Published var status: SpoofStatus = .idle
     @Published var pin: CLLocationCoordinate2D?
     @Published var simulated: CLLocationCoordinate2D?
     @Published var travelMode: TravelMode = .walk
-    /// Non-nil when the user has entered a custom speed to use instead of the selected
-    /// travel mode's preset. This is the ONLY other input to movement speed besides
-    /// `travelMode` — see `currentSpeedMPS`, the single place that resolves the two.
     @Published var customSpeedMPS: Double?
+    @Published var speedUnit: SpeedUnit = SpeedPreference.preferredUnit
     @Published var mapStyleIndex: Int = 0
     @Published var lastError: String?
     @Published var isBusy = false
@@ -58,6 +83,7 @@ final class SpoofSession: ObservableObject {
     @Published var isBusStopActive: Bool = false
     @Published var routeDestinationName: String = ""
     @Published var routeFinishedFlash: Bool = false
+    @Published var routeCompletionSummary: RouteCompletionStats? = nil
     @Published var activeRouteTotalDistance: CLLocationDistance = 0.0
     @Published var activeRouteWaypoints: [RouteWaypoint] = []
 
@@ -69,6 +95,64 @@ final class SpoofSession: ObservableObject {
     @Published var pathWidth: PathWidthPreference = ThemePreference.pathWidth
     @Published var uiAppearance: UIAppearanceStyle = ThemePreference.appearance
     @Published var showWaypointLabels: Bool = ThemePreference.showWaypointLabels
+    @Published var themeVersion: Int = 0
+
+    // Dynamic Theme Color Observables (Instant live updates)
+    @Published var customPrimaryHex: String = ThemePreference.customPrimaryHex
+    @Published var customSecondaryHex: String = ThemePreference.customSecondaryHex
+    @Published var customTextColorHex: String = ThemePreference.customTextColorHex
+    @Published var isCustomTextColorEnabled: Bool = ThemePreference.isCustomTextColorEnabled
+    @Published var customMenuTintHex: String = ThemePreference.customMenuTintHex
+    @Published var isMenuTintEnabled: Bool = ThemePreference.isMenuTintEnabled
+    @Published var glassTintHex: String = ThemePreference.glassTintHex
+    @Published var isGlassTintEnabled: Bool = ThemePreference.isGlassTintEnabled
+    @Published var completionFlashHex: String = ThemePreference.completionFlashHex
+
+    // Smart Routing & Simulation Behavior Toggles
+    @Published var isBusModeActive: Bool = false
+    @Published var isCarModeActive: Bool = false
+    @Published var busModeSmartStops: Bool = true
+    @Published var smartTrafficLights: Bool = true
+    @Published var routeNotificationsEnabled: Bool = true
+
+    var primaryAccentColor: Color {
+        accentTheme == .custom ? (Color(hex: customPrimaryHex) ?? accentTheme.primaryColor) : accentTheme.primaryColor
+    }
+
+    var secondaryAccentColor: Color {
+        accentTheme == .custom ? (Color(hex: customSecondaryHex) ?? accentTheme.secondaryColor) : accentTheme.secondaryColor
+    }
+
+    var effectiveTextColor: Color {
+        if isCustomTextColorEnabled, let color = Color(hex: customTextColorHex) {
+            return color
+        }
+        return .primary
+    }
+
+    var effectiveMenuTint: Color? {
+        if isMenuTintEnabled, let color = Color(hex: customMenuTintHex) {
+            return color
+        }
+        if isGlassTintEnabled, let color = Color(hex: glassTintHex) {
+            return color
+        }
+        return nil
+    }
+
+    var effectiveGlassTint: Color? {
+        if isGlassTintEnabled, let color = Color(hex: glassTintHex) {
+            return color
+        }
+        return nil
+    }
+
+    var effectiveCompletionFlashColor: Color {
+        if let color = Color(hex: completionFlashHex) {
+            return color
+        }
+        return Color(red: 0.20, green: 0.83, blue: 0.60)
+    }
 
     private var resendTimer: Timer?
     private var healthTimer: Timer?
@@ -93,6 +177,15 @@ final class SpoofSession: ObservableObject {
         uiAppearance = ThemePreference.appearance
         showWaypointLabels = ThemePreference.showWaypointLabels
         customSpeedMPS = SpeedPreference.storedValue
+        customPrimaryHex = ThemePreference.customPrimaryHex
+        customSecondaryHex = ThemePreference.customSecondaryHex
+        customTextColorHex = ThemePreference.customTextColorHex
+        isCustomTextColorEnabled = ThemePreference.isCustomTextColorEnabled
+        customMenuTintHex = ThemePreference.customMenuTintHex
+        isMenuTintEnabled = ThemePreference.isMenuTintEnabled
+        glassTintHex = ThemePreference.glassTintHex
+        isGlassTintEnabled = ThemePreference.isGlassTintEnabled
+        completionFlashHex = ThemePreference.completionFlashHex
     }
 
     func setDefaultConnectionType(_ type: RouteConnectionType) {
@@ -103,20 +196,72 @@ final class SpoofSession: ObservableObject {
     func setAccentTheme(_ theme: AccentColorTheme) {
         accentTheme = theme
         ThemePreference.accent = theme
+        themeVersion += 1
+        objectWillChange.send()
     }
 
     func setCustomPrimaryHex(_ hex: String) {
+        customPrimaryHex = hex
         ThemePreference.customPrimaryHex = hex
         accentTheme = .custom
         ThemePreference.accent = .custom
+        themeVersion += 1
         objectWillChange.send()
     }
 
     func setCustomSecondaryHex(_ hex: String) {
+        customSecondaryHex = hex
         ThemePreference.customSecondaryHex = hex
         accentTheme = .custom
         ThemePreference.accent = .custom
+        themeVersion += 1
         objectWillChange.send()
+    }
+
+    func updateCustomColors(
+        primaryHex: String? = nil,
+        secondaryHex: String? = nil,
+        textColorHex: String? = nil,
+        menuTintHex: String? = nil,
+        glassTintHex: String? = nil,
+        flashHex: String? = nil
+    ) {
+        if let primaryHex {
+            self.customPrimaryHex = primaryHex
+            ThemePreference.customPrimaryHex = primaryHex
+            self.accentTheme = .custom
+            ThemePreference.accent = .custom
+        }
+        if let secondaryHex {
+            self.customSecondaryHex = secondaryHex
+            ThemePreference.customSecondaryHex = secondaryHex
+            self.accentTheme = .custom
+            ThemePreference.accent = .custom
+        }
+        if let textColorHex {
+            self.customTextColorHex = textColorHex
+            self.isCustomTextColorEnabled = true
+            ThemePreference.customTextColorHex = textColorHex
+            ThemePreference.isCustomTextColorEnabled = true
+        }
+        if let menuTintHex {
+            self.customMenuTintHex = menuTintHex
+            self.isMenuTintEnabled = true
+            ThemePreference.customMenuTintHex = menuTintHex
+            ThemePreference.isMenuTintEnabled = true
+        }
+        if let glassTintHex {
+            self.glassTintHex = glassTintHex
+            self.isGlassTintEnabled = true
+            ThemePreference.glassTintHex = glassTintHex
+            ThemePreference.hasCustomGlassTint = true
+        }
+        if let flashHex {
+            self.completionFlashHex = flashHex
+            ThemePreference.completionFlashHex = flashHex
+        }
+        self.themeVersion += 1
+        self.objectWillChange.send()
     }
 
     func setPathWidth(_ width: PathWidthPreference) {
@@ -155,6 +300,14 @@ final class SpoofSession: ObservableObject {
         customSpeedMPS = nil
         SpeedPreference.setCustomSpeed(nil)
         updateRemainingRouteDuration()
+        objectWillChange.send()
+    }
+
+    /// Sets the user's preferred speed unit (mph, km/h, m/s).
+    func setSpeedUnit(_ unit: SpeedUnit) {
+        speedUnit = unit
+        SpeedPreference.preferredUnit = unit
+        objectWillChange.send()
     }
 
     /// Recalculates estimated remaining route duration when speed is changed during route playback.
@@ -165,16 +318,15 @@ final class SpoofSession: ObservableObject {
         remainingRouteDuration = travel + dwellLeft
     }
 
-    /// Validates and applies a custom speed typed by the user (see `SpeedInput`),
-    /// persisting it so it survives relaunch. Safe to call while the joystick is
-    /// active — it only changes the value `tickJoystick` reads next tick.
-    /// Returns `false` without changing anything if the text isn't a valid speed.
+    /// Validates and applies a custom speed typed by the user in the selected speed unit.
     @discardableResult
-    func setCustomSpeed(fromText text: String) -> Bool {
-        guard let value = SpeedInput.parse(text) else { return false }
+    func setCustomSpeed(fromText text: String, unit: SpeedUnit? = nil) -> Bool {
+        let u = unit ?? speedUnit
+        guard let value = SpeedInput.parse(text, unit: u) else { return false }
         customSpeedMPS = value
         SpeedPreference.setCustomSpeed(value)
         updateRemainingRouteDuration()
+        objectWillChange.send()
         return true
     }
 
@@ -183,6 +335,14 @@ final class SpoofSession: ObservableObject {
         customSpeedMPS = nil
         SpeedPreference.setCustomSpeed(nil)
         updateRemainingRouteDuration()
+        objectWillChange.send()
+    }
+
+    func dismissCompletionSummary() {
+        SoundManager.play(.tap)
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+            routeCompletionSummary = nil
+        }
     }
 
     func teleport(to coordinate: CLLocationCoordinate2D, pairing: PairingStore) {
@@ -342,6 +502,7 @@ final class SpoofSession: ObservableObject {
         }
 
         let definedStops = waypoints.filter { $0.stopDuration > 0 }
+        let routeStartTime = Date()
 
         routeTask = Task { [weak self] in
             guard let self else { return }
@@ -392,16 +553,17 @@ final class SpoofSession: ObservableObject {
                         }
                         if Task.isCancelled { break }
 
-                        // Dynamic live speed read on every tick with realistic human/vehicle variance
+                        // Dynamic live speed read with natural human gait cadence
                         let speedMPS = self.currentSpeedMPS
                         let speedJitter: Double
                         if self.travelMode == .walk || self.travelMode == .sidewalk {
-                            // Natural walking speed variance for Life360 authenticity (±7%)
-                            speedJitter = Double.random(in: 0.93...1.07)
+                            // Authentic human stride cadence variance (±6%)
+                            let stepCadence = sin(cumulativeDistanceTraveled * 3.1) * 0.06
+                            speedJitter = 1.0 + stepCadence + Double.random(in: -0.02...0.02)
                         } else if self.travelMode == .run {
-                            speedJitter = Double.random(in: 0.95...1.05)
+                            speedJitter = Double.random(in: 0.96...1.04)
                         } else {
-                            speedJitter = Double.random(in: 0.97...1.03)
+                            speedJitter = Double.random(in: 0.98...1.02)
                         }
                         let liveSpeed = max(0.4, speedMPS * speedJitter)
                         let dt: TimeInterval = 0.25
@@ -417,10 +579,10 @@ final class SpoofSession: ObservableObject {
                             longitude: previous.longitude + (next.longitude - previous.longitude) * t
                         )
 
-                        // For walking and sidewalk modes, apply subtle realistic lateral step sway (~0.25m)
+                        // For walking and sidewalk modes, apply subtle realistic lateral step sway (~0.20m)
                         if (self.travelMode == .walk || self.travelMode == .sidewalk) && segDist > 2 {
                             let heading = atan2(next.longitude - previous.longitude, next.latitude - previous.latitude)
-                            let swayMeters = sin(cumulativeDistanceTraveled * 2.2) * 0.22
+                            let swayMeters = sin(cumulativeDistanceTraveled * 2.4) * 0.18
                             let earthRadius = 6378137.0
                             let latOffset = (swayMeters * cos(heading + .pi / 2)) / earthRadius * (180.0 / .pi)
                             let lonOffset = (swayMeters * sin(heading + .pi / 2)) / (earthRadius * cos(coord.latitude * .pi / 180.0)) * (180.0 / .pi)
@@ -446,16 +608,24 @@ final class SpoofSession: ObservableObject {
                             self.remainingRouteCoordinates = remainingSlice
                         }
 
-                        // Simulated bus stop every ~450m for Bus mode
-                        if self.travelMode == .bus && distanceSinceLastBusStop > 420 {
-                            distanceSinceLastBusStop = 0
-                            await self.performBusStop(pairing: pairing)
+                        // Smart Traffic Lights: ONLY stop if we are near an actual street intersection / turn junction!
+                        if (self.travelMode == .drive || self.isCarModeActive || self.smartTrafficLights) && distanceSinceLastLight > 400 {
+                            if idx > 0 && idx < coordinates.count - 1 && Self.isIntersection(before: coordinates[idx - 1], at: coordinates[idx], after: coordinates[idx + 1]) {
+                                distanceSinceLastLight = 0
+                                if Double.random(in: 0...1) < 0.35 {
+                                    await self.performTrafficLightStop(pairing: pairing)
+                                }
+                            }
                         }
 
-                        // Simulated traffic light every ~750m for car mode
-                        if self.travelMode == .drive && distanceSinceLastLight > 750 {
-                            distanceSinceLastLight = 0
-                            await self.performTrafficLightStop(pairing: pairing)
+                        // Smart Bus Stops: only stop at detected public transit stops or junctions
+                        if (self.travelMode == .bus || self.isBusModeActive) && self.busModeSmartStops && distanceSinceLastBusStop > 350 {
+                            if idx > 0 && idx < coordinates.count - 1 && Self.isIntersection(before: coordinates[idx - 1], at: coordinates[idx], after: coordinates[idx + 1]) {
+                                distanceSinceLastBusStop = 0
+                                if Double.random(in: 0...1) < 0.45 {
+                                    await self.performBusStop(pairing: pairing)
+                                }
+                            }
                         }
 
                         try? await Task.sleep(nanoseconds: UInt64(dt * 1_000_000_000))
@@ -471,7 +641,6 @@ final class SpoofSession: ObservableObject {
                             .distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude)) < 15
                     }) {
                         let stop = pendingStops.remove(at: stopIdx)
-                        // Snap directly to the pin coordinate before dwelling
                         await MainActor.run {
                             self.apply(stop.coordinate, pairing: pairing, markRecent: false)
                         }
@@ -488,23 +657,61 @@ final class SpoofSession: ObservableObject {
             await MainActor.run {
                 self.isFollowingRoute = false
                 self.isRoutePaused = false
-                self.routeProgress = 0.0
+                self.routeProgress = 1.0
                 self.remainingRouteDistance = 0.0
                 self.remainingRouteDuration = 0.0
-                self.completedRouteCoordinates = []
-                self.remainingRouteCoordinates = []
                 self.activeStopName = nil
                 self.activeStopRemainingSeconds = nil
                 self.isTrafficLightStopActive = false
                 self.isBusStopActive = false
 
+                let totalDuration = Date().timeIntervalSince(routeStartTime)
+                self.routeCompletionSummary = RouteCompletionStats(
+                    destinationName: self.routeDestinationName.isEmpty ? "Destination" : self.routeDestinationName,
+                    totalDistanceMeters: totalRouteDistance,
+                    durationSeconds: max(1, totalDuration),
+                    stopsVisited: definedStops.count
+                )
+
                 // Completion triggers: rumble haptics, notification, sound, and screen flash!
                 self.triggerCompletionRumble()
                 self.notifyRouteFinished(destination: self.routeDestinationName)
-                self.routeFinishedFlash = true
+                withAnimation(.easeIn(duration: 0.15)) {
+                    self.routeFinishedFlash = true
+                }
                 SoundManager.play(.success)
+
+                // Auto-fade flash after 1.2 seconds so screen NEVER stays green!
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                    withAnimation(.easeOut(duration: 0.45)) {
+                        self?.routeFinishedFlash = false
+                    }
+                }
             }
         }
+    }
+
+    /// Calculates initial bearing in degrees from p1 to p2
+    static func bearing(from p1: CLLocationCoordinate2D, to p2: CLLocationCoordinate2D) -> Double {
+        let lat1 = p1.latitude * .pi / 180
+        let lon1 = p1.longitude * .pi / 180
+        let lat2 = p2.latitude * .pi / 180
+        let lon2 = p2.longitude * .pi / 180
+        let dLon = lon2 - lon1
+        let y = sin(dLon) * cos(lat2)
+        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+        let rad = atan2(y, x)
+        return (rad * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    /// Checks if a waypoint junction forms a street turn/intersection (heading change > 28°)
+    static func isIntersection(before: CLLocationCoordinate2D, at: CLLocationCoordinate2D, after: CLLocationCoordinate2D) -> Bool {
+        let b1 = bearing(from: before, to: at)
+        let b2 = bearing(from: at, to: after)
+        var diff = abs(b1 - b2)
+        if diff > 180 { diff = 360 - diff }
+        return diff > 28.0
+    }
     }
 
     /// Dynamically updates the active route when waypoints or path is modified during execution or pause
@@ -640,12 +847,17 @@ final class SpoofSession: ObservableObject {
     }
 
     func notifyRouteFinished(destination: String) {
-        let content = UNMutableNotificationContent()
-        content.title = "Route Completed"
-        content.body = destination.isEmpty ? "Your simulated route has reached the final destination." : "Arrived at \(destination)."
-        content.sound = .default
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+        guard routeNotificationsEnabled else { return }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "Route Completed"
+            content.body = destination.isEmpty ? "Your simulated route has reached the final destination." : "Arrived at \(destination)."
+            content.sound = .default
+            content.userInfo = ["url": "locus://route_completed", "destination": destination]
+            let request = UNNotificationRequest(identifier: "locus.route.finish.\(UUID().uuidString)", content: content, trigger: nil)
+            UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+        }
     }
 
     func triggerCompletionRumble() {

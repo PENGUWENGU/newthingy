@@ -8,17 +8,33 @@ struct RootView: View {
     @State private var showPlaces = false
 
     var body: some View {
-        // Bottom chrome is a sibling overlay aligned to the bottom — no full-screen
-        // Spacer layer that can steal / pass map taps through the tray.
         ZStack(alignment: .bottom) {
             MapHomeView()
 
-            BottomControlsView(
-                showSettings: $showSettings,
-                showPlaces: $showPlaces
-            )
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
+            VStack(spacing: 8) {
+                if session.joystickActive {
+                    HStack {
+                        Spacer()
+                        JoystickPad(
+                            onChange: { vector in
+                                session.updateJoystick(vector: vector)
+                            },
+                            onClose: {
+                                session.stopJoystick()
+                            }
+                        )
+                        .padding(.trailing, 18)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+                }
+
+                BottomControlsView(
+                    showSettings: $showSettings,
+                    showPlaces: $showPlaces
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+            }
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
@@ -164,14 +180,7 @@ struct BottomControlsView: View {
     private let trayShape = RoundedRectangle(cornerRadius: 28, style: .continuous)
 
     var body: some View {
-        VStack(spacing: 12) {
-            if session.joystickActive {
-                JoystickPad { vector in
-                    session.updateJoystick(vector: vector)
-                }
-                .frame(width: 148, height: 148)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-            }
+        VStack(spacing: 10) {
 
             HStack(spacing: 8) {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -296,17 +305,21 @@ struct SpeedChip: View {
     @EnvironmentObject private var session: SpoofSession
     @State private var showEditor = false
     @State private var speedText = ""
+    @State private var selectedUnit: SpeedUnit = .mph
     @State private var errorMessage: String?
 
     var body: some View {
         Button {
-            speedText = Self.formatter.string(from: NSNumber(value: session.currentSpeedMPS)) ?? ""
+            SoundManager.play(.tap)
+            selectedUnit = session.speedUnit
+            let currentVal = session.speedUnit.fromMPS(session.currentSpeedMPS)
+            speedText = String(format: "%.1f", currentVal)
             errorMessage = nil
             showEditor = true
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "speedometer")
-                Text(speedLabel)
+                Text(session.speedUnit.format(session.currentSpeedMPS))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
@@ -326,59 +339,69 @@ struct SpeedChip: View {
         }
     }
 
-    private var speedLabel: String {
-        (Self.formatter.string(from: NSNumber(value: session.currentSpeedMPS)) ?? "0") + " m/s"
-    }
-
     private var speedEditor: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Custom speed")
+            Text("Movement Speed")
                 .font(.headline)
-            Text("Applies to both the joystick and route/GPX playback, in meters per second.")
+
+            Picker("Unit", selection: $selectedUnit) {
+                ForEach(SpeedUnit.allCases) { u in
+                    Text(u.label).tag(u)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: selectedUnit) { _, newUnit in
+                session.setSpeedUnit(newUnit)
+                let val = newUnit.fromMPS(session.currentSpeedMPS)
+                speedText = String(format: "%.1f", val)
+            }
+
+            Text("Enter speed in \(selectedUnit.label):")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
             HStack {
-                TextField("e.g. 5.0", text: $speedText)
+                TextField("e.g. 10.0", text: $speedText)
                     .keyboardType(.decimalPad)
                     .textFieldStyle(.roundedBorder)
-                Text("m/s")
+                Text(selectedUnit.label)
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
+
             if let errorMessage {
                 Text(errorMessage)
                     .font(.caption)
                     .foregroundStyle(LocusTheme.danger)
             }
+
             HStack {
-                Button("Use preset") {
+                Button("Reset Preset") {
+                    SoundManager.play(.toggle)
                     session.clearCustomSpeed()
                     errorMessage = nil
                     showEditor = false
                 }
                 .buttonStyle(.bordered)
+
                 Spacer()
-                Button("Set") {
-                    if session.setCustomSpeed(fromText: speedText) {
+
+                Button("Set Speed") {
+                    if session.setCustomSpeed(fromText: speedText, unit: selectedUnit) {
+                        SoundManager.play(.success)
                         errorMessage = nil
                         showEditor = false
                     } else {
-                        errorMessage = "Enter a number greater than 0 (e.g. 2.5)."
+                        SoundManager.play(.alert)
+                        errorMessage = "Enter a valid positive number (e.g. 10.0)."
                     }
                 }
                 .buttonStyle(.borderedProminent)
             }
         }
         .padding(18)
-        .frame(width: 260)
+        .frame(width: 275)
     }
-
-    private static let formatter: NumberFormatter = {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = 1
-        formatter.maximumFractionDigits = 2
-        return formatter
-    }()
 }
 
 struct IconButton: View {

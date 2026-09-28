@@ -1,0 +1,7 @@
+{
+  "name": "Locus",
+  "description": "Premium iOS GPS simulation, location testing, and route spoofing studio with liquid glass UI, human gait pacing, smart traffic light and bus stops, and instant theme customization.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
