@@ -5,13 +5,11 @@ options:
     iOS: "18.0"
   xcodeVersion: "16.0"
   createIntermediateGroups: true
-  # Icon Composer packages must be treated as a single file, not exploded.
   fileTypes:
     icon:
       file: true
 settings:
   base:
-    # Set your Apple Developer Team ID to build from source (see README).
     DEVELOPMENT_TEAM: ""
     SWIFT_VERSION: "5.0"
     TARGETED_DEVICE_FAMILY: "1,2"
@@ -30,6 +28,8 @@ targets:
         buildPhase: none
       - path: Vendor/idevice/idevice.h
         buildPhase: none
+    dependencies:
+      - target: LocusWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chrismack.locus
@@ -57,18 +57,40 @@ targets:
         SUPPORTS_MACCATALYST: NO
         SWIFT_OBJC_BRIDGING_HEADER: ""
         SWIFT_COMPILATION_MODE: "wholemodule"
-  # Pure-logic unit tests for the GPX codec and custom-speed validation. Deliberately has
-  # no `dependencies:` on the Locus target: Locus links Vendor/idevice/libidevice_ffi.a,
-  # which is a device-only (arm64) static library with no iOS Simulator slice, so a test
-  # bundle hosted by/linked against Locus could never run on a GitHub Actions runner
-  # (no physical iPhone attached). Compiling the same source files directly into this
-  # standalone bundle instead keeps the tests fully independent of that library, so they
-  # run for real on the iOS Simulator both locally and in CI.
+
+  LocusWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: LocusWidgets
+        excludes:
+          - "**/Info.plist"
+      - path: Locus/Engine/LocusRouteActivityAttributes.swift
+      - path: Locus/Features/Routes/LocusLiveActivityWidget.swift
+      - path: Locus/Engine/TravelMode.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.chrismack.locus.widgets
+        PRODUCT_NAME: LocusWidgets
+        MARKETING_VERSION: "1.0.2"
+        CURRENT_PROJECT_VERSION: "3"
+        INFOPLIST_FILE: LocusWidgets/Info.plist
+        GENERATE_INFOPLIST_FILE: false
+        SWIFT_VERSION: "5.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        ENABLE_BITCODE: NO
+        SUPPORTS_MACCATALYST: NO
+        SWIFT_COMPILATION_MODE: "wholemodule"
+
   LocusTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: LocusTests
+        excludes:
+          - "**/Info.plist"
       - path: Locus/Engine/RouteBuilder.swift
       - path: Locus/Engine/TravelMode.swift
       - path: Locus/Support/SavedRoute.swift

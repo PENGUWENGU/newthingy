@@ -16,9 +16,11 @@ struct LocusRouteActivityAttributes: ActivityAttributes {
         var departureCountdownText: String
         var arrivalText: String
         var remainingTimeText: String
+        var remainingDistanceText: String
         var destinationName: String
         var currentSpeedFormatted: String
         var travelModeIcon: String
+        var isPaused: Bool
         var isCompleted: Bool
 
         init(
@@ -30,9 +32,11 @@ struct LocusRouteActivityAttributes: ActivityAttributes {
             departureCountdownText: String = "",
             arrivalText: String = "",
             remainingTimeText: String = "",
+            remainingDistanceText: String = "",
             destinationName: String = "",
             currentSpeedFormatted: String = "",
             travelModeIcon: String = "figure.walk",
+            isPaused: Bool = false,
             isCompleted: Bool = false
         ) {
             self.statusTitle = statusTitle
@@ -43,9 +47,11 @@ struct LocusRouteActivityAttributes: ActivityAttributes {
             self.departureCountdownText = departureCountdownText
             self.arrivalText = arrivalText
             self.remainingTimeText = remainingTimeText
+            self.remainingDistanceText = remainingDistanceText
             self.destinationName = destinationName
             self.currentSpeedFormatted = currentSpeedFormatted
             self.travelModeIcon = travelModeIcon
+            self.isPaused = isPaused
             self.isCompleted = isCompleted
         }
     }

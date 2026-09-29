@@ -5,6 +5,23 @@ import ActivityKit
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
+#if canImport(AppIntents)
+import AppIntents
+
+@available(iOS 16.0, *)
+struct ToggleRouteSimulationIntent: AppIntent, LiveActivityIntent {
+    static var title: LocalizedStringResource = "Pause or Resume Route"
+    static var description = IntentDescription("Toggles pause state in Locus route simulation.")
+    static var isDiscoverable = false
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run {
+            NotificationCenter.default.post(name: Notification.Name("locusToggleRoutePause"), object: nil)
+        }
+        return .result()
+    }
+}
+#endif
 
 #if canImport(ActivityKit) && canImport(WidgetKit)
 @available(iOS 16.1, *)
@@ -24,24 +41,35 @@ struct LocusLiveActivityWidgetView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Top Header Row (matching reference Lock Screen card)
+        VStack(alignment: .leading, spacing: 12) {
+            // Top Header: Icon + Title + Live Speed & Interactive Pause Button
             HStack(alignment: .center, spacing: 10) {
-                // Clock / Transit Icon
+                // Large Glowing Transit Icon
                 ZStack {
                     Circle()
-                        .fill(badgeColor.opacity(0.2))
-                        .frame(width: 34, height: 34)
-                    Image(systemName: state.isCompleted ? "checkmark" : "clock.fill")
-                        .font(.system(size: 18, weight: .bold))
+                        .fill(badgeColor.opacity(0.25))
+                        .frame(width: 40, height: 40)
+                    Image(systemName: state.isCompleted ? "checkmark" : (state.isPaused ? "pause.fill" : "clock.fill"))
+                        .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(badgeColor)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(state.statusTitle)
-                        .font(.system(size: 19, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(state.statusTitle)
+                            .font(.system(size: 19, weight: .heavy, design: .rounded))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+
+                        if state.isPaused {
+                            Text("PAUSED")
+                                .font(.system(size: 9, weight: .black))
+                                .foregroundStyle(.black)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.yellow))
+                        }
+                    }
 
                     HStack(spacing: 6) {
                         if let badge = state.badgeNumber {
@@ -61,17 +89,33 @@ struct LocusLiveActivityWidgetView: View {
 
                 Spacer()
 
-                if !state.currentSpeedFormatted.isEmpty && !state.isCompleted {
-                    Text(state.currentSpeedFormatted)
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(Color.white.opacity(0.12)))
+                // Speed Pill & Interactive Pause Button
+                HStack(spacing: 8) {
+                    if !state.currentSpeedFormatted.isEmpty && !state.isCompleted {
+                        Text(state.currentSpeedFormatted)
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(badgeColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Color.white.opacity(0.12)))
+                    }
+
+                    #if canImport(AppIntents)
+                    if #available(iOS 17.0, *), !state.isCompleted {
+                        Button(intent: ToggleRouteSimulationIntent()) {
+                            Image(systemName: state.isPaused ? "play.fill" : "pause.fill")
+                                .font(.system(size: 13, weight: .black))
+                                .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(Circle().fill(Color.white.opacity(0.18)))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    #endif
                 }
             }
 
-            // Progress Bar Track with Moving Marker (matching Transit card)
+            // Big Rich Progress Bar Track with Moving Walker/Vehicle Glyph
             GeometryReader { geo in
                 let trackWidth = geo.size.width
                 let progressClamped = CGFloat(min(1.0, max(0.0, state.progress)))
@@ -79,10 +123,10 @@ struct LocusLiveActivityWidgetView: View {
                 ZStack(alignment: .leading) {
                     // Track Background
                     Capsule()
-                        .fill(Color.white.opacity(0.18))
-                        .frame(height: 7)
+                        .fill(Color.white.opacity(0.16))
+                        .frame(height: 8)
 
-                    // Active Progress Track
+                    // Active Glowing Progress Track
                     Capsule()
                         .fill(
                             LinearGradient(
@@ -91,32 +135,32 @@ struct LocusLiveActivityWidgetView: View {
                                 endPoint: .trailing
                             )
                         )
-                        .frame(width: max(14, trackWidth * progressClamped), height: 7)
+                        .frame(width: max(16, trackWidth * progressClamped), height: 8)
 
                     // Moving Walker / Vehicle Badge along track
                     HStack(spacing: 0) {
                         Spacer()
-                            .frame(width: max(0, (trackWidth - 22) * progressClamped))
+                            .frame(width: max(0, (trackWidth - 26) * progressClamped))
 
                         ZStack {
                             Circle()
                                 .fill(badgeColor)
-                                .frame(width: 22, height: 22)
-                                .shadow(color: badgeColor.opacity(0.6), radius: 4, y: 1)
+                                .frame(width: 26, height: 26)
+                                .shadow(color: badgeColor.opacity(0.7), radius: 5, y: 1)
                             Image(systemName: state.travelModeIcon)
-                                .font(.system(size: 11, weight: .bold))
+                                .font(.system(size: 12, weight: .bold))
                                 .foregroundStyle(.white)
                         }
                     }
                 }
             }
-            .frame(height: 22)
+            .frame(height: 26)
 
-            // Bottom Arrival & Time Row
+            // Bottom Arrival ETA, Distance Left, and Time Remaining
             HStack(alignment: .center) {
                 HStack(spacing: 5) {
                     Image(systemName: "mappin.circle.fill")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(badgeColor)
                     Text(state.arrivalText)
                         .font(.system(size: 14, weight: .bold))
@@ -125,19 +169,27 @@ struct LocusLiveActivityWidgetView: View {
 
                 Spacer()
 
-                Text(state.remainingTimeText)
-                    .font(.system(size: 14, weight: .heavy))
-                    .foregroundStyle(.white.opacity(0.95))
+                HStack(spacing: 8) {
+                    if !state.remainingDistanceText.isEmpty && !state.isCompleted {
+                        Text(state.remainingDistanceText)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+
+                    Text(state.remainingTimeText)
+                        .font(.system(size: 14, weight: .heavy))
+                        .foregroundStyle(.white)
+                }
             }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 16)
         .background(
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(Color(red: 0.12, green: 0.08, blue: 0.05).opacity(0.92))
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Color(red: 0.12, green: 0.08, blue: 0.05).opacity(0.96))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 26, style: .continuous)
-                        .strokeBorder(badgeColor.opacity(0.35), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .strokeBorder(badgeColor.opacity(0.4), lineWidth: 1.2)
                 )
         )
     }

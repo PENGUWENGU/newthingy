@@ -67,6 +67,9 @@ struct LocusApp: App {
                     handleIncoming(url)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .locusToggleRoutePause)) { _ in
+                session.togglePauseRoute()
+            }
         }
     }
 

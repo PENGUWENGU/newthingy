@@ -407,11 +407,35 @@ final class SpoofSession: ObservableObject {
     func pauseRoute() {
         guard isFollowingRoute && !isRoutePaused else { return }
         isRoutePaused = true
+        if liveActivitiesEnabled {
+            LiveActivityManager.shared.updateActivity(
+                progress: routeProgress,
+                remainingDistanceMeters: remainingRouteDistance,
+                remainingDurationSeconds: remainingRouteDuration,
+                destinationName: routeDestinationName,
+                travelMode: travelMode,
+                speedFormatted: speedUnit.format(currentSpeedMPS),
+                activeStopName: activeStopName,
+                isPaused: true
+            )
+        }
     }
 
     func resumeRoute() {
         guard isFollowingRoute && isRoutePaused else { return }
         isRoutePaused = false
+        if liveActivitiesEnabled {
+            LiveActivityManager.shared.updateActivity(
+                progress: routeProgress,
+                remainingDistanceMeters: remainingRouteDistance,
+                remainingDurationSeconds: remainingRouteDuration,
+                destinationName: routeDestinationName,
+                travelMode: travelMode,
+                speedFormatted: speedUnit.format(currentSpeedMPS),
+                activeStopName: activeStopName,
+                isPaused: false
+            )
+        }
     }
 
     func togglePauseRoute() {
@@ -654,7 +678,8 @@ final class SpoofSession: ObservableObject {
                                     destinationName: self.routeDestinationName,
                                     travelMode: self.travelMode,
                                     speedFormatted: self.speedUnit.format(liveSpeed),
-                                    activeStopName: self.activeStopName
+                                    activeStopName: self.activeStopName,
+                                    isPaused: self.isRoutePaused
                                 )
                             }
                         }

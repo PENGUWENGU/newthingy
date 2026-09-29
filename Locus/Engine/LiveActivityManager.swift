@@ -1,6 +1,5 @@
 import Foundation
 import CoreLocation
-import UserNotifications
 #if canImport(ActivityKit)
 import ActivityKit
 #endif
@@ -12,9 +11,6 @@ final class LiveActivityManager {
     #if canImport(ActivityKit)
     private var currentActivity: Any? // Holds Activity<LocusRouteActivityAttributes>?
     #endif
-
-    private let liveNotificationId = "locus.live.route"
-    private var lastNotificationPostTime: Date = .distantPast
 
     private init() {}
 
@@ -34,10 +30,14 @@ final class LiveActivityManager {
         travelMode: TravelMode,
         speedFormatted: String,
         initialRemainingSeconds: TimeInterval,
-        routeDistanceMeters: Double
+        routeDistanceMeters: Double,
+        isPaused: Bool = false
     ) {
-        // 1. Request notification permissions if not yet granted
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        #if canImport(ActivityKit)
+        guard #available(iOS 16.1, *) else { return }
+
+        // End any previous activity
+        endActivity(destinationName: destinationName)
 
         let eta = Date().addingTimeInterval(initialRemainingSeconds)
         let formatter = DateFormatter()
@@ -46,22 +46,8 @@ final class LiveActivityManager {
 
         let initialMinutes = max(1, Int(ceil(initialRemainingSeconds / 60.0)))
         let durationStr = formatRemainingDuration(initialRemainingSeconds)
+        let distanceStr = formatDistance(routeDistanceMeters)
         let countdownStr = "Go in \(initialMinutes) minutes"
-
-        // 2. Post Local Live Notification for Notification Center / Lock Screen
-        postLiveNotification(
-            title: countdownStr,
-            subtitle: "\(travelMode.title) • \(arrivalStr)",
-            body: "\(destinationName) • \(durationStr) remaining (\(speedFormatted))"
-        )
-
-        // 3. ActivityKit Live Activity (iOS 16.1+)
-        #if canImport(ActivityKit)
-        guard #available(iOS 16.1, *) else { return }
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-
-        // End any previous activity
-        endActivity(destinationName: destinationName)
 
         let state = LocusRouteActivityAttributes.ContentState(
             statusTitle: countdownStr,
@@ -72,9 +58,11 @@ final class LiveActivityManager {
             departureCountdownText: countdownStr,
             arrivalText: arrivalStr,
             remainingTimeText: durationStr,
+            remainingDistanceText: distanceStr,
             destinationName: destinationName,
             currentSpeedFormatted: speedFormatted,
             travelModeIcon: travelMode.icon,
+            isPaused: isPaused,
             isCompleted: false
         )
 
@@ -104,8 +92,12 @@ final class LiveActivityManager {
         destinationName: String,
         travelMode: TravelMode,
         speedFormatted: String,
-        activeStopName: String? = nil
+        activeStopName: String? = nil,
+        isPaused: Bool = false
     ) {
+        #if canImport(ActivityKit)
+        guard #available(iOS 16.1, *), let activity = currentActivity as? Activity<LocusRouteActivityAttributes> else { return }
+
         let eta = Date().addingTimeInterval(remainingDurationSeconds)
         let formatter = DateFormatter()
         formatter.dateFormat = "h:mm a"
@@ -113,6 +105,7 @@ final class LiveActivityManager {
 
         let minutesLeft = max(1, Int(ceil(remainingDurationSeconds / 60.0)))
         let durationStr = formatRemainingDuration(remainingDurationSeconds)
+        let distanceStr = formatDistance(remainingDistanceMeters)
 
         let title: String
         let subtitle: String
@@ -128,18 +121,6 @@ final class LiveActivityManager {
             subtitle = "\(travelMode.title) • in \(minutesLeft) minutes"
         }
 
-        // Throttle local notification updates to every 12 seconds so notification sound/banners don't spam
-        if Date().timeIntervalSince(lastNotificationPostTime) >= 12 || minutesLeft <= 1 {
-            postLiveNotification(
-                title: title,
-                subtitle: "\(subtitle) • \(arrivalStr)",
-                body: "\(destinationName) • \(durationStr) left (\(speedFormatted))"
-            )
-        }
-
-        #if canImport(ActivityKit)
-        guard #available(iOS 16.1, *), let activity = currentActivity as? Activity<LocusRouteActivityAttributes> else { return }
-
         let state = LocusRouteActivityAttributes.ContentState(
             statusTitle: title,
             statusSubtitle: subtitle,
@@ -149,9 +130,11 @@ final class LiveActivityManager {
             departureCountdownText: title,
             arrivalText: arrivalStr,
             remainingTimeText: durationStr,
+            remainingDistanceText: distanceStr,
             destinationName: destinationName,
             currentSpeedFormatted: speedFormatted,
             travelModeIcon: travelMode.icon,
+            isPaused: isPaused,
             isCompleted: false
         )
 
@@ -162,10 +145,6 @@ final class LiveActivityManager {
     }
 
     func endActivity(destinationName: String = "Destination") {
-        // Clear active live notification
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [liveNotificationId])
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [liveNotificationId])
-
         #if canImport(ActivityKit)
         guard #available(iOS 16.1, *), let activity = currentActivity as? Activity<LocusRouteActivityAttributes> else { return }
 
@@ -178,9 +157,11 @@ final class LiveActivityManager {
             departureCountdownText: "Arrived",
             arrivalText: "Arrived safely",
             remainingTimeText: "0 min",
+            remainingDistanceText: "0 m",
             destinationName: destinationName,
             currentSpeedFormatted: "0.0 mph",
             travelModeIcon: "checkmark.circle.fill",
+            isPaused: false,
             isCompleted: true
         )
 
@@ -191,19 +172,6 @@ final class LiveActivityManager {
         #endif
     }
 
-    private func postLiveNotification(title: String, subtitle: String, body: String) {
-        lastNotificationPostTime = Date()
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.subtitle = subtitle
-        content.body = body
-        content.sound = nil // Silent continuous update so it doesn't beep repeatedly
-        content.userInfo = ["url": "locus://route_active"]
-
-        let request = UNNotificationRequest(identifier: liveNotificationId, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
-    }
-
     private func formatRemainingDuration(_ seconds: TimeInterval) -> String {
         let totalMinutes = Int(ceil(seconds / 60.0))
         if totalMinutes < 60 {
@@ -212,6 +180,14 @@ final class LiveActivityManager {
             let hours = totalMinutes / 60
             let mins = totalMinutes % 60
             return mins > 0 ? "\(hours) h \(mins) min" : "\(hours) h"
+        }
+    }
+
+    private func formatDistance(_ meters: Double) -> String {
+        if meters < 1000 {
+            return String(format: "%.0f m", meters)
+        } else {
+            return String(format: "%.1f km", meters / 1000.0)
         }
     }
 }
