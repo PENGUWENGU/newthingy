@@ -5,8 +5,8 @@ import ActivityKit
 #endif
 
 @MainActor
-public final class LiveActivityManager {
-    public static let shared = LiveActivityManager()
+final class LiveActivityManager {
+    static let shared = LiveActivityManager()
 
     #if canImport(ActivityKit)
     private var currentActivity: Any? // Holds Activity<LocusRouteActivityAttributes>?
@@ -14,7 +14,7 @@ public final class LiveActivityManager {
 
     private init() {}
 
-    public var isActivityActive: Bool {
+    var isActivityActive: Bool {
         #if canImport(ActivityKit)
         if #available(iOS 16.1, *) {
             return currentActivity != nil
@@ -23,7 +23,7 @@ public final class LiveActivityManager {
         return false
     }
 
-    public func startActivity(
+    func startActivity(
         routeId: String = UUID().uuidString,
         startName: String = "Current Location",
         destinationName: String,
@@ -82,7 +82,7 @@ public final class LiveActivityManager {
         #endif
     }
 
-    public func updateActivity(
+    func updateActivity(
         progress: Double,
         remainingDistanceMeters: Double,
         remainingDurationSeconds: TimeInterval,
@@ -137,7 +137,7 @@ public final class LiveActivityManager {
         #endif
     }
 
-    public func endActivity(destinationName: String = "Destination") {
+    func endActivity(destinationName: String = "Destination") {
         #if canImport(ActivityKit)
         guard #available(iOS 16.1, *), let activity = currentActivity as? Activity<LocusRouteActivityAttributes> else { return }
 

@@ -8,10 +8,10 @@ import WidgetKit
 
 #if canImport(ActivityKit) && canImport(WidgetKit)
 @available(iOS 16.1, *)
-public struct LocusLiveActivityWidgetView: View {
-    public let context: ActivityViewContext<LocusRouteActivityAttributes>
+struct LocusLiveActivityWidgetView: View {
+    let context: ActivityViewContext<LocusRouteActivityAttributes>
 
-    public init(context: ActivityViewContext<LocusRouteActivityAttributes>) {
+    init(context: ActivityViewContext<LocusRouteActivityAttributes>) {
         self.context = context
     }
 
@@ -23,7 +23,7 @@ public struct LocusLiveActivityWidgetView: View {
         Color(hex: state.badgeColorHex) ?? Color.orange
     }
 
-    public var body: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             // Top Header Row (matching reference Lock Screen card)
             HStack(alignment: .center, spacing: 10) {

@@ -6,22 +6,22 @@ import SwiftUI
 
 #if canImport(ActivityKit)
 @available(iOS 16.1, *)
-public struct LocusRouteActivityAttributes: ActivityAttributes {
-    public struct ContentState: Codable, Hashable {
-        public var statusTitle: String
-        public var statusSubtitle: String
-        public var badgeNumber: String?
-        public var badgeColorHex: String
-        public var progress: Double
-        public var departureCountdownText: String
-        public var arrivalText: String
-        public var remainingTimeText: String
-        public var destinationName: String
-        public var currentSpeedFormatted: String
-        public var travelModeIcon: String
-        public var isCompleted: Bool
+struct LocusRouteActivityAttributes: ActivityAttributes {
+    struct ContentState: Codable, Hashable {
+        var statusTitle: String
+        var statusSubtitle: String
+        var badgeNumber: String?
+        var badgeColorHex: String
+        var progress: Double
+        var departureCountdownText: String
+        var arrivalText: String
+        var remainingTimeText: String
+        var destinationName: String
+        var currentSpeedFormatted: String
+        var travelModeIcon: String
+        var isCompleted: Bool
 
-        public init(
+        init(
             statusTitle: String,
             statusSubtitle: String,
             badgeNumber: String? = nil,
@@ -50,11 +50,11 @@ public struct LocusRouteActivityAttributes: ActivityAttributes {
         }
     }
 
-    public var routeId: String
-    public var startLocationName: String
-    public var targetDestinationName: String
+    var routeId: String
+    var startLocationName: String
+    var targetDestinationName: String
 
-    public init(routeId: String, startLocationName: String = "Start", targetDestinationName: String = "Destination") {
+    init(routeId: String, startLocationName: String = "Start", targetDestinationName: String = "Destination") {
         self.routeId = routeId
         self.startLocationName = startLocationName
         self.targetDestinationName = targetDestinationName
