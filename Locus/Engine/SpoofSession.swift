@@ -98,6 +98,11 @@ final class SpoofSession: ObservableObject {
     @Published var showWaypointLabels: Bool = ThemePreference.showWaypointLabels
     @Published var themeVersion: Int = 0
 
+    // Live Activities & Location Realism
+    @Published var liveActivitiesEnabled: Bool = (UserDefaults.standard.object(forKey: "locus.liveActivitiesEnabled") as? Bool) ?? true
+    @Published var life360RealismEnabled: Bool = (UserDefaults.standard.object(forKey: "locus.life360Realism") as? Bool) ?? true
+    @Published var stationaryDriftEnabled: Bool = (UserDefaults.standard.object(forKey: "locus.stationaryDrift") as? Bool) ?? true
+
     // Dynamic Theme Color Observables (Instant live updates)
     @Published var customPrimaryHex: String = ThemePreference.customPrimaryHex
     @Published var customSecondaryHex: String = ThemePreference.customSecondaryHex
@@ -391,6 +396,9 @@ final class SpoofSession: ObservableObject {
         activeStopName = nil
         activeStopRemainingSeconds = nil
         skipCurrentStopRequested = false
+        if liveActivitiesEnabled {
+            LiveActivityManager.shared.endActivity(destinationName: routeDestinationName)
+        }
     }
 
     func pauseRoute() {
@@ -505,6 +513,16 @@ final class SpoofSession: ObservableObject {
         let definedStops = waypoints.filter { $0.stopDuration > 0 }
         let routeStartTime = Date()
 
+        if liveActivitiesEnabled {
+            LiveActivityManager.shared.startActivity(
+                destinationName: routeDestinationName,
+                travelMode: travelMode,
+                speedFormatted: speedUnit.format(currentSpeedMPS),
+                initialRemainingSeconds: remainingRouteDuration,
+                routeDistanceMeters: totalRouteDistance
+            )
+        }
+
         routeTask = Task { [weak self] in
             guard let self else { return }
             var shouldContinue = true
@@ -607,6 +625,17 @@ final class SpoofSession: ObservableObject {
                             self.remainingRouteDuration = remainingTravel + remainingStops
                             self.completedRouteCoordinates = completedSlice
                             self.remainingRouteCoordinates = remainingSlice
+                            if self.liveActivitiesEnabled {
+                                LiveActivityManager.shared.updateActivity(
+                                    progress: self.routeProgress,
+                                    remainingDistanceMeters: remainingDistance,
+                                    remainingDurationSeconds: self.remainingRouteDuration,
+                                    destinationName: self.routeDestinationName,
+                                    travelMode: self.travelMode,
+                                    speedFormatted: self.speedUnit.format(self.currentSpeedMPS),
+                                    activeStopName: self.activeStopName
+                                )
+                            }
                         }
 
                         // Smart Traffic Lights: ONLY stop if we are near an actual street intersection / turn junction!
@@ -665,6 +694,10 @@ final class SpoofSession: ObservableObject {
                 self.activeStopRemainingSeconds = nil
                 self.isTrafficLightStopActive = false
                 self.isBusStopActive = false
+
+                if self.liveActivitiesEnabled {
+                    LiveActivityManager.shared.endActivity(destinationName: self.routeDestinationName)
+                }
 
                 let totalDuration = Date().timeIntervalSince(routeStartTime)
                 self.routeCompletionSummary = RouteCompletionStats(
@@ -1022,12 +1055,20 @@ final class SpoofSession: ObservableObject {
 
     private func startResend(pairing: PairingStore) {
         resendTimer?.invalidate()
-        resendTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in
+        // 2.5s high-frequency keepalive so locationd and apps like Life360 don't mark GPS as dead or stalled
+        resendTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let sim = self.simulated else { return }
+                var targetCoord = sim
+                if self.stationaryDriftEnabled && !self.isFollowingRoute && !self.joystickActive {
+                    // Inject subtle natural micro-drift (~0.25m) so locationd and Life360 receive continuous live GPS fixes
+                    let driftMeters = Double.random(in: -0.3...0.3)
+                    let driftAngle = Double.random(in: 0...(2 * .pi))
+                    targetCoord = self.offset(coordinate: sim, eastMeters: cos(driftAngle) * driftMeters, northMeters: sin(driftAngle) * driftMeters)
+                }
                 _ = LocationEngine.set(
-                    latitude: sim.latitude,
-                    longitude: sim.longitude,
+                    latitude: targetCoord.latitude,
+                    longitude: targetCoord.longitude,
                     pairingPath: pairing.pairingPath,
                     deviceIP: TunnelConfig.targetIP
                 )

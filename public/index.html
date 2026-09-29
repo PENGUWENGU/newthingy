@@ -657,6 +657,146 @@
       opacity: 1;
     }
 
+    /* Lock Screen Live Activity Widget Card (Transit-Style matching uploaded screenshot) */
+    .live-activity-card {
+      position: absolute;
+      bottom: 110px;
+      left: 14px;
+      right: 14px;
+      background: rgba(36, 22, 14, 0.94);
+      backdrop-filter: blur(28px);
+      -webkit-backdrop-filter: blur(28px);
+      border: 1px solid rgba(255, 149, 0, 0.35);
+      border-radius: 26px;
+      padding: 14px 16px;
+      z-index: 450;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.7);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transform: translateY(0);
+      transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+
+    .live-activity-card.hidden {
+      display: none;
+    }
+
+    .la-top-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .la-clock-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255, 149, 0, 0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #FF9500;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+
+    .la-title-group {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      flex: 1;
+    }
+
+    .la-main-title {
+      font-size: 16px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -0.3px;
+    }
+
+    .la-sub-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.85);
+      font-weight: 600;
+    }
+
+    .la-route-badge {
+      background: #FF9500;
+      color: #000;
+      font-size: 10px;
+      font-weight: 900;
+      padding: 1px 6px;
+      border-radius: 6px;
+      display: inline-block;
+    }
+
+    .la-progress-track-wrapper {
+      position: relative;
+      width: 100%;
+      height: 22px;
+      display: flex;
+      align-items: center;
+    }
+
+    .la-track-bg {
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.18);
+      border-radius: 3px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .la-track-fill {
+      height: 100%;
+      width: 15%;
+      background: linear-gradient(90deg, #FF9500, #FF5E3A);
+      border-radius: 3px;
+      transition: width 0.2s ease;
+    }
+
+    .la-moving-nub {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #FF9500;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 10px;
+      box-shadow: 0 2px 8px rgba(255, 149, 0, 0.6);
+      transform: translateX(0px);
+      transition: transform 0.2s ease;
+    }
+
+    .la-bottom-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .la-arrive-text {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12.5px;
+    }
+
+    .la-arrive-text i {
+      color: #FF9500;
+    }
+
     /* Floating Draggable Joystick Nub */
     .floating-joystick {
       position: absolute;
@@ -1107,6 +1247,28 @@
 
         <div class="toggle-row">
           <div class="toggle-info">
+            <span class="toggle-name">Live Activities (Lock Screen)</span>
+            <span class="toggle-desc">Transit-style countdown card & Island</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleLiveActivity" checked onchange="toggleLiveActivityCard(this.checked)">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-name">Life360 & GPS Speed Realism</span>
+            <span class="toggle-desc">High-cadence streaming & drift</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleLife360" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-info">
             <span class="toggle-name">Smart Bus Stops</span>
             <span class="toggle-desc">Stops only at transit clusters / turns</span>
           </div>
@@ -1171,11 +1333,11 @@
       <div class="iphone-frame">
         
         <!-- Dynamic Island -->
-        <div class="dynamic-island" onclick="triggerNotification('Locus GPS Engine Active', 'Route following with human gait')">
+        <div class="dynamic-island" onclick="triggerNotification('Locus Live Activity Active', 'Live route progress streaming')">
           <div class="island-camera"></div>
           <div style="font-size: 9px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 4px;">
-            <span style="width: 5px; height: 5px; background: #30D158; border-radius: 50%; display: inline-block;"></span>
-            <span id="islandStatusText">GPS Active</span>
+            <span style="width: 5px; height: 5px; background: #FF9500; border-radius: 50%; display: inline-block;"></span>
+            <span id="islandStatusText">Go in 54m</span>
           </div>
           <div class="island-dot"></div>
         </div>
@@ -1219,6 +1381,40 @@
             <button class="icon-btn-round" title="Center on Me" onclick="recenterMap()">
               <i class="fa-solid fa-crosshairs"></i>
             </button>
+          </div>
+
+          <!-- Live Activity Lock Screen Card Widget (matching Transit user screenshot) -->
+          <div class="live-activity-card" id="liveActivityCard">
+            <div class="la-top-row">
+              <div class="la-clock-icon">
+                <i class="fa-solid fa-clock"></i>
+              </div>
+              <div class="la-title-group">
+                <div class="la-main-title" id="laTitleText">Go in 54 minutes</div>
+                <div class="la-sub-row">
+                  <span class="la-route-badge" id="laRouteBadge">234</span>
+                  <span id="laSubText">in 58 minutes</span>
+                </div>
+              </div>
+              <div style="font-size: 11px; font-weight: 800; color: #FF9500; font-family: monospace;" id="laSpeedBadge">3.1 mph</div>
+            </div>
+
+            <div class="la-progress-track-wrapper">
+              <div class="la-track-bg">
+                <div class="la-track-fill" id="laTrackFill" style="width: 15%;"></div>
+              </div>
+              <div class="la-moving-nub" id="laMovingNub" style="left: 15%;">
+                <i class="fa-solid fa-person-walking" id="laNubIcon"></i>
+              </div>
+            </div>
+
+            <div class="la-bottom-row">
+              <div class="la-arrive-text">
+                <i class="fa-solid fa-location-dot"></i>
+                <span id="laArriveText">Arrive at 2:02 AM</span>
+              </div>
+              <div id="laDurationText" style="font-weight: 800; color: rgba(255,255,255,0.9);">1 h 20 min</div>
+            </div>
           </div>
 
           <!-- Floating Draggable Joystick Control -->
@@ -1670,10 +1866,52 @@
         const remainingSec = Math.round(remainingDist / Math.max(0.1, currentSpeedMPS));
         document.getElementById('routeEtaLabel').innerText = `${(remainingDist / 1000).toFixed(2)} km • ${Math.round(remainingSec / 60)}m left`;
 
+        // Update Live Activity Card
+        updateLiveActivityUI(progressRatio, remainingSec, remainingDist);
+
         // Advance index according to current speed
         const advanceSteps = Math.max(1, Math.round((currentSpeedMPS * (stepDurationMs / 1000)) / 1.5));
         simIndex += advanceSteps;
       }, stepDurationMs);
+    }
+
+    function updateLiveActivityUI(progressRatio, remainingSec, remainingDist) {
+      const minutesLeft = Math.max(1, Math.round(remainingSec / 60));
+      const hoursLeft = Math.floor(minutesLeft / 60);
+      const remMins = minutesLeft % 60;
+      const durationStr = hoursLeft > 0 ? (remMins > 0 ? `${hoursLeft} h ${remMins} min` : `${hoursLeft} h`) : `${minutesLeft} min`;
+
+      const etaDate = new Date(Date.now() + remainingSec * 1000);
+      let hours = etaDate.getHours();
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      hours = hours % 12 || 12;
+      const etaStr = `Arrive at ${hours}:${String(etaDate.getMinutes()).padStart(2, '0')} ${ampm}`;
+
+      document.getElementById('laTitleText').innerText = minutesLeft <= 1 ? 'Arriving now' : `Go in ${minutesLeft} minutes`;
+      document.getElementById('islandStatusText').innerText = `Go in ${minutesLeft}m`;
+      document.getElementById('laSubText').innerText = `in ${Math.min(58, minutesLeft + 4)} minutes`;
+      document.getElementById('laArriveText').innerText = etaStr;
+      document.getElementById('laDurationText').innerText = durationStr;
+
+      const pct = Math.min(100, Math.max(5, Math.round(progressRatio * 100)));
+      document.getElementById('laTrackFill').style.width = `${pct}%`;
+      const trackWrapper = document.querySelector('.la-progress-track-wrapper');
+      if (trackWrapper) {
+        const w = trackWrapper.clientWidth || 300;
+        const x = (w - 24) * progressRatio;
+        document.getElementById('laMovingNub').style.transform = `translateX(${Math.max(0, x)}px)`;
+      }
+
+      // Live Speed display
+      let speedFormatted = `${(currentSpeedMPS * (activeSpeedUnit === 'mph' ? 2.236936 : (activeSpeedUnit === 'kmh' ? 3.6 : 1.0))).toFixed(1)} ${activeSpeedUnit}`;
+      document.getElementById('laSpeedBadge').innerText = speedFormatted;
+    }
+
+    function toggleLiveActivityCard(show) {
+      const card = document.getElementById('liveActivityCard');
+      if (card) {
+        card.classList.toggle('hidden', !show);
+      }
     }
 
     function stopSimulation() {
@@ -1687,6 +1925,9 @@
     function finishSimulation() {
       stopSimulation();
       document.getElementById('progressFill').style.width = '100%';
+      updateLiveActivityUI(1.0, 0, 0);
+      document.getElementById('laTitleText').innerText = 'Route Completed!';
+      document.getElementById('laSubText').innerText = 'Arrived at destination';
 
       // Trigger Celebration sequence
       triggerCompletionCelebration();

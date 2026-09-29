@@ -157,6 +157,21 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle("Live Activities", isOn: Binding(
+                        get: { session.liveActivitiesEnabled },
+                        set: {
+                            session.liveActivitiesEnabled = $0
+                            UserDefaults.standard.set($0, forKey: "locus.liveActivitiesEnabled")
+                        }
+                    ))
+                    Toggle("Route Completion Notification", isOn: $session.routeNotificationsEnabled)
+                } header: {
+                    Text("Live Activities & Alerts")
+                } footer: {
+                    Text("Show live departure countdown ('Go in 54 minutes'), progress bar, and arrival ETA on your Lock Screen and Dynamic Island during routes.")
+                }
+
+                Section {
                     Picker("Speed Unit", selection: Binding(
                         get: { session.speedUnit },
                         set: {
@@ -172,11 +187,24 @@ struct SettingsView: View {
 
                     Toggle("Smart Traffic Lights", isOn: $session.smartTrafficLights)
                     Toggle("Smart Transit Bus Stops", isOn: $session.busModeSmartStops)
-                    Toggle("Route Completion Notification", isOn: $session.routeNotificationsEnabled)
+                    Toggle("Life360 & Continuous GPS Realism", isOn: Binding(
+                        get: { session.life360RealismEnabled },
+                        set: {
+                            session.life360RealismEnabled = $0
+                            UserDefaults.standard.set($0, forKey: "locus.life360Realism")
+                        }
+                    ))
+                    Toggle("Stationary Micro-Drift", isOn: Binding(
+                        get: { session.stationaryDriftEnabled },
+                        set: {
+                            session.stationaryDriftEnabled = $0
+                            UserDefaults.standard.set($0, forKey: "locus.stationaryDrift")
+                        }
+                    ))
                 } header: {
-                    Text("Movement & Smart Simulation")
+                    Text("Movement & Spoof Realism")
                 } footer: {
-                    Text("When Smart Traffic Lights is enabled, cars only pause at detected street intersections. When disabled or on uninterrupted roads, movement never pauses.")
+                    Text("High-frequency position streaming, smooth velocity acceleration, and subtle stationary micro-drift ensure tracking apps like Life360 accurately detect driving, transit, and walking speeds instead of reporting 0 mph.")
                 }
 
                 Section {
