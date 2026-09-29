@@ -168,6 +168,9 @@ final class SpoofSession: ObservableObject {
     private var joystickVector: CGVector = .zero
     private let locationKeeper = BackgroundKeepAlive()
     private var skipCurrentStopRequested = false
+    private var smoothedVelocityMPS: Double = 0.0
+    private var cumulativeDriftEast: Double = 0.0
+    private var cumulativeDriftNorth: Double = 0.0
 
     private let favoritesKey = "locus.favorites"
     private let recentsKey = "locus.recents"
@@ -572,20 +575,31 @@ final class SpoofSession: ObservableObject {
                         }
                         if Task.isCancelled { break }
 
-                        // Dynamic live speed read with natural human gait cadence
-                        let speedMPS = self.currentSpeedMPS
+                        // 1. Kinematic Acceleration / Deceleration Ramping
+                        let targetSpeedMPS = self.currentSpeedMPS
+                        let accelRate: Double = (self.travelMode == .drive || self.travelMode == .bus) ? 2.8 : 1.2
+                        let dt: TimeInterval = 0.25
+                        let maxSpeedDelta = accelRate * dt
+
+                        if self.smoothedVelocityMPS < targetSpeedMPS {
+                            self.smoothedVelocityMPS = min(targetSpeedMPS, self.smoothedVelocityMPS + maxSpeedDelta)
+                        } else if self.smoothedVelocityMPS > targetSpeedMPS {
+                            self.smoothedVelocityMPS = max(targetSpeedMPS, self.smoothedVelocityMPS - maxSpeedDelta)
+                        }
+
+                        // 2. Dynamic Velocity Vectors & Cadence Variation
                         let speedJitter: Double
                         if self.travelMode == .walk || self.travelMode == .sidewalk {
                             // Authentic human stride cadence variance (±6%)
                             let stepCadence = sin(cumulativeDistanceTraveled * 3.1) * 0.06
-                            speedJitter = 1.0 + stepCadence + Double.random(in: -0.02...0.02)
+                            speedJitter = 1.0 + stepCadence + Double.random(in: -0.025...0.025)
                         } else if self.travelMode == .run {
-                            speedJitter = Double.random(in: 0.96...1.04)
+                            speedJitter = 1.0 + sin(cumulativeDistanceTraveled * 2.6) * 0.04 + Double.random(in: -0.02...0.02)
                         } else {
-                            speedJitter = Double.random(in: 0.98...1.02)
+                            // Engine cruising variations
+                            speedJitter = 1.0 + Double.random(in: -0.03...0.03)
                         }
-                        let liveSpeed = max(0.4, speedMPS * speedJitter)
-                        let dt: TimeInterval = 0.25
+                        let liveSpeed = max(0.4, self.smoothedVelocityMPS * speedJitter)
                         let stepDist = max(0.08, liveSpeed * dt)
                         distanceInSegment = min(segDist, distanceInSegment + stepDist)
                         distanceSinceLastLight += stepDist
@@ -598,16 +612,23 @@ final class SpoofSession: ObservableObject {
                             longitude: previous.longitude + (next.longitude - previous.longitude) * t
                         )
 
-                        // For walking and sidewalk modes, apply subtle realistic lateral step sway (~0.20m)
+                        let segmentHeading = Self.bearing(from: previous, to: next)
+
+                        // For walking and sidewalk modes, apply subtle realistic lateral step sway (~0.18m)
                         if (self.travelMode == .walk || self.travelMode == .sidewalk) && segDist > 2 {
-                            let heading = atan2(next.longitude - previous.longitude, next.latitude - previous.latitude)
                             let swayMeters = sin(cumulativeDistanceTraveled * 2.4) * 0.18
                             let earthRadius = 6378137.0
-                            let latOffset = (swayMeters * cos(heading + .pi / 2)) / earthRadius * (180.0 / .pi)
-                            let lonOffset = (swayMeters * sin(heading + .pi / 2)) / (earthRadius * cos(coord.latitude * .pi / 180.0)) * (180.0 / .pi)
+                            let headingRad = segmentHeading * .pi / 180.0
+                            let latOffset = (swayMeters * cos(headingRad + .pi / 2)) / earthRadius * (180.0 / .pi)
+                            let lonOffset = (swayMeters * sin(headingRad + .pi / 2)) / (earthRadius * cos(coord.latitude * .pi / 180.0)) * (180.0 / .pi)
                             coord.latitude += latOffset
                             coord.longitude += lonOffset
                         }
+
+                        // 3. Realistic GPS Signal Noise (Multipath & HDOP Jitter) for Life360 Motion Detection
+                        let finalCoord = self.life360RealismEnabled
+                            ? Self.applyGPSNoise(to: coord, headingDegrees: segmentHeading, speedMPS: liveSpeed)
+                            : coord
 
                         let remainingInSegment = max(0, segDist - distanceInSegment)
                         let remainingDistance = remainingInSegment + suffixDistances[idx + 1]
@@ -619,7 +640,7 @@ final class SpoofSession: ObservableObject {
                         let remainingSlice = [coord] + Array(coordinates[(idx + 1)...])
 
                         await MainActor.run {
-                            self.apply(coord, pairing: pairing, markRecent: false)
+                            self.apply(finalCoord, pairing: pairing, markRecent: false)
                             self.routeProgress = min(1.0, max(0.0, 1.0 - (remainingDistance / max(1.0, totalRouteDistance))))
                             self.remainingRouteDistance = remainingDistance
                             self.remainingRouteDuration = remainingTravel + remainingStops
@@ -632,7 +653,7 @@ final class SpoofSession: ObservableObject {
                                     remainingDurationSeconds: self.remainingRouteDuration,
                                     destinationName: self.routeDestinationName,
                                     travelMode: self.travelMode,
-                                    speedFormatted: self.speedUnit.format(self.currentSpeedMPS),
+                                    speedFormatted: self.speedUnit.format(liveSpeed),
                                     activeStopName: self.activeStopName
                                 )
                             }
@@ -987,6 +1008,34 @@ final class SpoofSession: ObservableObject {
         return Self.coordinateLabel(coordinate)
     }
 
+    /// Injects realistic GPS measurement noise (multipath + atmospheric dilution of precision)
+    /// with cross-track and along-track jitter along the current velocity vector.
+    static func applyGPSNoise(
+        to coordinate: CLLocationCoordinate2D,
+        headingDegrees: Double,
+        speedMPS: Double
+    ) -> CLLocationCoordinate2D {
+        // Orthogonal Gaussian-like noise (Box-Muller transform)
+        let u1 = max(1e-6, Double.random(in: 0...1))
+        let u2 = Double.random(in: 0...1)
+        let z0 = sqrt(-2.0 * log(u1)) * cos(2.0 * .pi * u2)
+        let z1 = sqrt(-2.0 * log(u1)) * sin(2.0 * .pi * u2)
+
+        // Lateral cross-track noise (~0.35m) and along-track noise (~0.20m)
+        let crossTrackNoise = z0 * 0.35
+        let alongTrackNoise = z1 * 0.20
+
+        let headingRad = headingDegrees * .pi / 180.0
+        let eastMeters = alongTrackNoise * sin(headingRad) + crossTrackNoise * cos(headingRad)
+        let northMeters = alongTrackNoise * cos(headingRad) - crossTrackNoise * sin(headingRad)
+
+        let earthRadius = 6378137.0
+        let dLat = (northMeters / earthRadius) * (180.0 / .pi)
+        let dLon = (eastMeters / (earthRadius * cos(coordinate.latitude * .pi / 180.0))) * (180.0 / .pi)
+
+        return CLLocationCoordinate2D(latitude: coordinate.latitude + dLat, longitude: coordinate.longitude + dLon)
+    }
+
     private static func coordinateLabel(_ coordinate: CLLocationCoordinate2D) -> String {
         String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude)
     }
@@ -1043,28 +1092,43 @@ final class SpoofSession: ObservableObject {
     private func tickJoystick(pairing: PairingStore) {
         guard joystickActive, let current = simulated else { return }
         let magnitude = hypot(joystickVector.dx, joystickVector.dy)
-        guard magnitude > 0.08 else { return }
+        guard magnitude > 0.08 else {
+            smoothedVelocityMPS = max(0.0, smoothedVelocityMPS - 0.5)
+            return
+        }
         let nx = joystickVector.dx / magnitude
         let ny = -joystickVector.dy / magnitude
-        let speed = currentSpeedMPS * min(1.0, magnitude) * Double.random(in: 0.9...1.1)
+
+        // Kinematic joystick acceleration smoothing
+        let targetSpeed = currentSpeedMPS * min(1.0, magnitude)
+        smoothedVelocityMPS = smoothedVelocityMPS * 0.70 + targetSpeed * 0.30
+        let liveSpeed = max(0.35, smoothedVelocityMPS * Double.random(in: 0.96...1.04))
         let dt = 0.25
-        let meters = speed * dt
-        let next = offset(coordinate: current, eastMeters: nx * meters, northMeters: ny * meters)
-        apply(next, pairing: pairing, markRecent: false)
+        let meters = liveSpeed * dt
+
+        let headingDeg = (atan2(nx, ny) * 180.0 / .pi + 360.0).truncatingRemainder(dividingBy: 360.0)
+        let nextRaw = offset(coordinate: current, eastMeters: nx * meters, northMeters: ny * meters)
+        let nextNoisy = life360RealismEnabled
+            ? Self.applyGPSNoise(to: nextRaw, headingDegrees: headingDeg, speedMPS: liveSpeed)
+            : nextRaw
+
+        apply(nextNoisy, pairing: pairing, markRecent: false)
     }
 
     private func startResend(pairing: PairingStore) {
         resendTimer?.invalidate()
-        // 2.5s high-frequency keepalive so locationd and apps like Life360 don't mark GPS as dead or stalled
-        resendTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
+        // 2.0s high-frequency keepalive with 2D Brownian random walk to prevent Life360 0mph timeouts
+        resendTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let sim = self.simulated else { return }
                 var targetCoord = sim
                 if self.stationaryDriftEnabled && !self.isFollowingRoute && !self.joystickActive {
-                    // Inject subtle natural micro-drift (~0.25m) so locationd and Life360 receive continuous live GPS fixes
-                    let driftMeters = Double.random(in: -0.3...0.3)
-                    let driftAngle = Double.random(in: 0...(2 * .pi))
-                    targetCoord = self.offset(coordinate: sim, eastMeters: cos(driftAngle) * driftMeters, northMeters: sin(driftAngle) * driftMeters)
+                    // 2D Brownian drift with restorative spring pulling back toward base anchor
+                    let driftStepEast = Double.random(in: -0.25...0.25) - (self.cumulativeDriftEast * 0.22)
+                    let driftStepNorth = Double.random(in: -0.25...0.25) - (self.cumulativeDriftNorth * 0.22)
+                    self.cumulativeDriftEast = min(1.2, max(-1.2, self.cumulativeDriftEast + driftStepEast))
+                    self.cumulativeDriftNorth = min(1.2, max(-1.2, self.cumulativeDriftNorth + driftStepNorth))
+                    targetCoord = self.offset(coordinate: sim, eastMeters: self.cumulativeDriftEast, northMeters: self.cumulativeDriftNorth)
                 }
                 _ = LocationEngine.set(
                     latitude: targetCoord.latitude,

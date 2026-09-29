@@ -142,4 +142,41 @@ struct LocusLiveActivityWidgetView: View {
         )
     }
 }
+
+@available(iOS 16.1, *)
+struct LocusRouteLiveActivityWidget: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: LocusRouteActivityAttributes.self) { context in
+            // Lock Screen and Notification Center Widget
+            LocusLiveActivityWidgetView(context: context)
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    HStack {
+                        Image(systemName: context.state.travelModeIcon)
+                            .foregroundStyle(Color(hex: context.state.badgeColorHex) ?? .orange)
+                        Text(context.state.statusTitle)
+                            .font(.headline.weight(.heavy))
+                    }
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    Text(context.state.arrivalText)
+                        .font(.subheadline.weight(.bold))
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    LocusLiveActivityWidgetView(context: context)
+                }
+            } compactLeading: {
+                Image(systemName: context.state.travelModeIcon)
+                    .foregroundStyle(Color(hex: context.state.badgeColorHex) ?? .orange)
+            } compactTrailing: {
+                Text(context.state.remainingTimeText)
+                    .font(.caption2.weight(.bold))
+            } minimal: {
+                Image(systemName: context.state.travelModeIcon)
+                    .foregroundStyle(Color(hex: context.state.badgeColorHex) ?? .orange)
+            }
+        }
+    }
+}
 #endif
