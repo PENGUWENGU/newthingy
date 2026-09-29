@@ -24,6 +24,33 @@ struct ToggleRouteSimulationIntent: AppIntent, LiveActivityIntent {
 #endif
 
 #if canImport(ActivityKit) && canImport(WidgetKit)
+
+private func parseLiveActivityColor(hex: String, fallback: Color = .orange) -> Color {
+    let clean = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+    var int: UInt64 = 0
+    guard Scanner(string: clean).scanHexInt64(&int) else { return fallback }
+    switch clean.count {
+    case 3:
+        let r = Double((int >> 8) * 17) / 255.0
+        let g = Double((int >> 4 & 0xF) * 17) / 255.0
+        let b = Double((int & 0xF) * 17) / 255.0
+        return Color(red: r, green: g, blue: b)
+    case 6:
+        let r = Double((int >> 16) & 0xFF) / 255.0
+        let g = Double((int >> 8) & 0xFF) / 255.0
+        let b = Double(int & 0xFF) / 255.0
+        return Color(red: r, green: g, blue: b)
+    case 8:
+        let r = Double((int >> 24) & 0xFF) / 255.0
+        let g = Double((int >> 16) & 0xFF) / 255.0
+        let b = Double((int >> 8) & 0xFF) / 255.0
+        let a = Double(int & 0xFF) / 255.0
+        return Color(red: r, green: g, blue: b, opacity: a)
+    default:
+        return fallback
+    }
+}
+
 @available(iOS 16.1, *)
 struct LocusLiveActivityWidgetView: View {
     let context: ActivityViewContext<LocusRouteActivityAttributes>
@@ -37,7 +64,7 @@ struct LocusLiveActivityWidgetView: View {
     }
 
     private var badgeColor: Color {
-        Color(hex: state.badgeColorHex) ?? Color.orange
+        parseLiveActivityColor(hex: state.badgeColorHex, fallback: .orange)
     }
 
     var body: some View {
@@ -202,11 +229,12 @@ struct LocusRouteLiveActivityWidget: Widget {
             // Lock Screen and Notification Center Widget
             LocusLiveActivityWidgetView(context: context)
         } dynamicIsland: { context in
-            DynamicIsland {
+            let tintColor = parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: .orange)
+            return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    HStack {
+                    HStack(spacing: 4) {
                         Image(systemName: context.state.travelModeIcon)
-                            .foregroundStyle(Color(hex: context.state.badgeColorHex) ?? .orange)
+                            .foregroundStyle(tintColor)
                         Text(context.state.statusTitle)
                             .font(.headline.weight(.heavy))
                     }
@@ -220,13 +248,13 @@ struct LocusRouteLiveActivityWidget: Widget {
                 }
             } compactLeading: {
                 Image(systemName: context.state.travelModeIcon)
-                    .foregroundStyle(Color(hex: context.state.badgeColorHex) ?? .orange)
+                    .foregroundStyle(tintColor)
             } compactTrailing: {
                 Text(context.state.remainingTimeText)
                     .font(.caption2.weight(.bold))
             } minimal: {
                 Image(systemName: context.state.travelModeIcon)
-                    .foregroundStyle(Color(hex: context.state.badgeColorHex) ?? .orange)
+                    .foregroundStyle(tintColor)
             }
         }
     }
