@@ -32,12 +32,12 @@ enum TravelMode: String, CaseIterable, Identifiable {
     /// Base meters per second before natural variation.
     var baseSpeed: CLLocationSpeed {
         switch self {
-        case .walk: return 1.4      // ~3.1 mph
-        case .sidewalk: return 1.25 // ~2.8 mph (pedestrian sidewalk pacing)
-        case .run: return 3.3       // ~7.4 mph
-        case .cycle: return 6.5     // ~14.5 mph
-        case .bus: return 8.9       // ~20.0 mph (transit bus pacing)
-        case .drive: return 13.4    // ~30.0 mph
+        case .walk: return 1.55     // ~3.5 mph
+        case .sidewalk: return 1.40 // ~3.1 mph
+        case .run: return 3.6       // ~8.1 mph
+        case .cycle: return 7.2     // ~16.1 mph (safely above Life360 15mph cutoff)
+        case .bus: return 10.0      // ~22.4 mph
+        case .drive: return 14.5    // ~32.4 mph
         }
     }
 

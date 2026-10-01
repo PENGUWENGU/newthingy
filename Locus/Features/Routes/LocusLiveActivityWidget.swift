@@ -16,7 +16,7 @@ struct ToggleRouteSimulationIntent: AppIntent, LiveActivityIntent {
 
     func perform() async throws -> some IntentResult {
         await MainActor.run {
-            NotificationCenter.default.post(name: Notification.Name("locusToggleRoutePause"), object: nil)
+            NotificationCenter.default.post(name: .locusToggleRoutePause, object: nil)
         }
         return .result()
     }
@@ -229,12 +229,11 @@ struct LocusRouteLiveActivityWidget: Widget {
             // Lock Screen and Notification Center Widget
             LocusLiveActivityWidgetView(context: context)
         } dynamicIsland: { context in
-            let tintColor = parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: .orange)
-            return DynamicIsland {
+            DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 4) {
                         Image(systemName: context.state.travelModeIcon)
-                            .foregroundStyle(tintColor)
+                            .foregroundStyle(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: .orange))
                         Text(context.state.statusTitle)
                             .font(.headline.weight(.heavy))
                     }
@@ -244,17 +243,28 @@ struct LocusRouteLiveActivityWidget: Widget {
                         .font(.subheadline.weight(.bold))
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    LocusLiveActivityWidgetView(context: context)
+                    HStack {
+                        if !context.state.remainingDistanceText.isEmpty && !context.state.isCompleted {
+                            Text(context.state.remainingDistanceText)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(context.state.remainingTimeText)
+                            .font(.caption.weight(.bold))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
                 }
             } compactLeading: {
                 Image(systemName: context.state.travelModeIcon)
-                    .foregroundStyle(tintColor)
+                    .foregroundStyle(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: .orange))
             } compactTrailing: {
                 Text(context.state.remainingTimeText)
                     .font(.caption2.weight(.bold))
             } minimal: {
                 Image(systemName: context.state.travelModeIcon)
-                    .foregroundStyle(tintColor)
+                    .foregroundStyle(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: .orange))
             }
         }
     }

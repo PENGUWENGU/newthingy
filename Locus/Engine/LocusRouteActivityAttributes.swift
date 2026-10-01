@@ -67,3 +67,9 @@ struct LocusRouteActivityAttributes: ActivityAttributes {
     }
 }
 #endif
+
+extension Notification.Name {
+    public static let locusImportGPX = Notification.Name("locusImportGPX")
+    public static let locusOpenDeepLink = Notification.Name("locusOpenDeepLink")
+    public static let locusToggleRoutePause = Notification.Name("locusToggleRoutePause")
+}

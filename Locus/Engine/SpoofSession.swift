@@ -101,6 +101,7 @@ final class SpoofSession: ObservableObject {
     // Live Activities & Location Realism
     @Published var liveActivitiesEnabled: Bool = (UserDefaults.standard.object(forKey: "locus.liveActivitiesEnabled") as? Bool) ?? true
     @Published var life360RealismEnabled: Bool = (UserDefaults.standard.object(forKey: "locus.life360Realism") as? Bool) ?? true
+    @Published var life360SpeedBoost: Bool = (UserDefaults.standard.object(forKey: "locus.life360SpeedBoost") as? Bool) ?? true
     @Published var stationaryDriftEnabled: Bool = (UserDefaults.standard.object(forKey: "locus.stationaryDrift") as? Bool) ?? true
 
     // Dynamic Theme Color Observables (Instant live updates)
@@ -117,8 +118,8 @@ final class SpoofSession: ObservableObject {
     // Smart Routing & Simulation Behavior Toggles
     @Published var isBusModeActive: Bool = false
     @Published var isCarModeActive: Bool = false
-    @Published var busModeSmartStops: Bool = true
-    @Published var smartTrafficLights: Bool = true
+    @Published var busModeSmartStops: Bool = false
+    @Published var smartTrafficLights: Bool = false
     @Published var routeNotificationsEnabled: Bool = true
 
     var primaryAccentColor: Color {
@@ -167,10 +168,13 @@ final class SpoofSession: ObservableObject {
     private var backgroundTask = UIBackgroundTaskIdentifier.invalid
     private var joystickVector: CGVector = .zero
     private let locationKeeper = BackgroundKeepAlive()
+    private let audioKeeper = SilentAudioKeepAlive()
     private var skipCurrentStopRequested = false
     private var smoothedVelocityMPS: Double = 0.0
     private var cumulativeDriftEast: Double = 0.0
     private var cumulativeDriftNorth: Double = 0.0
+    private var persistentCrossTrackError: Double = 0.0
+    private var persistentAlongTrackError: Double = 0.0
 
     private let favoritesKey = "locus.favorites"
     private let recentsKey = "locus.recents"
@@ -300,7 +304,14 @@ final class SpoofSession: ObservableObject {
     /// `travelMode` still independently decides the road-routing transport type
     /// (walking vs. driving directions) — that's unaffected by a custom speed.
     var currentSpeedMPS: CLLocationSpeed {
-        customSpeedMPS ?? travelMode.baseSpeed
+        let base = customSpeedMPS ?? travelMode.baseSpeed
+        // Life360 requires speeds strictly over 15 mph (6.7 m/s) to display real-time movement and active driving.
+        // When life360SpeedBoost is enabled and the mode speed is under 16 mph, boost to 17.5 mph (7.82 m/s)
+        // so Life360 reliably detects movement instead of reporting 0 mph.
+        if life360RealismEnabled && life360SpeedBoost && base < 7.15 {
+            return 7.82 // ~17.5 mph
+        }
+        return base
     }
 
     /// Switches travel mode and clears any custom speed override so the new mode's speed is used immediately.
@@ -375,6 +386,7 @@ final class SpoofSession: ObservableObject {
         case .success:
             simulated = nil
             status = .idle
+            audioKeeper.stop()
             endBackground()
             // Keep location updates running so the map puck / locate button
             // can return to the real GPS fix (not the leftover pin).
@@ -478,24 +490,33 @@ final class SpoofSession: ObservableObject {
         if simulated == nil {
             apply(start, pairing: pairing, markRecent: false)
         }
+        stopResend()
+        audioKeeper.start()
+        locationKeeper.start()
+        beginBackground()
         joystickActive = true
         joystickTimer?.invalidate()
-        joystickTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.tickJoystick(pairing: pairing)
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        joystickTimer = timer
     }
 
     func updateJoystick(vector: CGVector) {
         joystickVector = vector
     }
 
-    func stopJoystick() {
+    func stopJoystick(pairing: PairingStore? = nil) {
         joystickActive = false
         joystickVector = .zero
         joystickTimer?.invalidate()
         joystickTimer = nil
+        if let pairing, !isFollowingRoute {
+            startResend(pairing: pairing)
+        }
     }
 
     func followRoute(
@@ -508,6 +529,11 @@ final class SpoofSession: ObservableObject {
         guard pairing.hasPairingFile, coordinates.count >= 2 else { return }
         routeTask?.cancel()
         stopJoystick()
+        stopResend()
+        audioKeeper.start()
+        locationKeeper.start()
+        beginBackground()
+
         isFollowingRoute = true
         isRoutePaused = false
         routeProgress = 0.0
@@ -519,6 +545,9 @@ final class SpoofSession: ObservableObject {
         routeDestinationName = destinationName.isEmpty ? (waypoints.last?.name ?? "Destination") : destinationName
         activeRouteWaypoints = waypoints
 
+        // Immediately begin with cruising velocity for realistic motion detection
+        smoothedVelocityMPS = currentSpeedMPS
+
         let totalRouteDistance = RouteBuilder.totalDistance(of: coordinates)
         activeRouteTotalDistance = totalRouteDistance
         remainingRouteDistance = totalRouteDistance
@@ -529,12 +558,16 @@ final class SpoofSession: ObservableObject {
         // Request notification permission for route completion alert if needed
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
 
-        // Precompute cumulative suffix distances to quickly compute accurate remaining distance
+        // Precompute segment distances and cumulative suffix distances
+        var segmentDistances = [CLLocationDistance](repeating: 0, count: max(1, coordinates.count - 1))
+        for i in 0..<(coordinates.count - 1) {
+            segmentDistances[i] = CLLocation(latitude: coordinates[i].latitude, longitude: coordinates[i].longitude)
+                .distance(from: CLLocation(latitude: coordinates[i + 1].latitude, longitude: coordinates[i + 1].longitude))
+        }
+
         var suffixDistances = [CLLocationDistance](repeating: 0, count: coordinates.count)
         for i in (0..<(coordinates.count - 1)).reversed() {
-            let seg = CLLocation(latitude: coordinates[i].latitude, longitude: coordinates[i].longitude)
-                .distance(from: CLLocation(latitude: coordinates[i + 1].latitude, longitude: coordinates[i + 1].longitude))
-            suffixDistances[i] = suffixDistances[i + 1] + seg
+            suffixDistances[i] = suffixDistances[i + 1] + segmentDistances[i]
         }
 
         let definedStops = waypoints.filter { $0.stopDuration > 0 }
@@ -559,177 +592,202 @@ final class SpoofSession: ObservableObject {
 
             while shouldContinue && !Task.isCancelled {
                 var pendingStops = definedStops
-                var previous = coordinates[0]
+                var currentSegmentIndex: Int = 0
+                var distanceInCurrentSegment: CLLocationDistance = 0.0
+                var lastEpochWallTime = CACurrentMediaTime()
+
                 await MainActor.run {
-                    self.apply(previous, pairing: pairing, markRecent: true)
+                    self.apply(coordinates[0], pairing: pairing, markRecent: true)
+                    self.stopResend()
                     self.routeProgress = 0.0
                     self.remainingRouteDistance = totalRouteDistance
                     self.remainingRouteDuration = travelDuration + totalStopsDuration
-                    self.completedRouteCoordinates = [previous]
+                    self.completedRouteCoordinates = [coordinates[0]]
                     self.remainingRouteCoordinates = coordinates
                 }
 
-                // Check starting point stop - snap exactly to coordinate
+                // Check starting point stop
                 if let stopIdx = pendingStops.firstIndex(where: {
                     CLLocation(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude)
-                        .distance(from: CLLocation(latitude: previous.latitude, longitude: previous.longitude)) < 15
+                        .distance(from: CLLocation(latitude: coordinates[0].latitude, longitude: coordinates[0].longitude)) < 15
                 }) {
                     let stop = pendingStops.remove(at: stopIdx)
                     await self.performStop(stop, pairing: pairing)
+                    lastEpochWallTime = CACurrentMediaTime()
                 }
 
-                let totalSegments = max(1, coordinates.count - 1)
-                for (idx, next) in coordinates.dropFirst().enumerated() {
-                    if Task.isCancelled { break }
-
-                    // Pause gate before segment starts
+                while currentSegmentIndex < (coordinates.count - 1) && !Task.isCancelled {
+                    // Pause gate during traversal
                     while self.isRoutePaused && !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 200_000_000)
+                        lastEpochWallTime = CACurrentMediaTime()
                     }
                     if Task.isCancelled { break }
 
-                    let segDist = CLLocation(latitude: previous.latitude, longitude: previous.longitude)
-                        .distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude))
-                    var distanceInSegment: CLLocationDistance = 0.0
+                    let epochStart = CACurrentMediaTime()
+                    let actualElapsed = max(0.2, min(2.0, epochStart - lastEpochWallTime))
+                    lastEpochWallTime = epochStart
 
-                    while distanceInSegment < segDist && !Task.isCancelled {
-                        // Pause gate during traversal
-                        while self.isRoutePaused && !Task.isCancelled {
-                            try? await Task.sleep(nanoseconds: 100_000_000)
-                        }
-                        if Task.isCancelled { break }
+                    // 1. Kinematic Acceleration / Deceleration Ramping
+                    let targetSpeedMPS = self.currentSpeedMPS
+                    let accelRate: Double = (self.travelMode == .drive || self.travelMode == .bus) ? 3.5 : 1.8
+                    let maxSpeedDelta = accelRate * actualElapsed
 
-                        // 1. Kinematic Acceleration / Deceleration Ramping
-                        let targetSpeedMPS = self.currentSpeedMPS
-                        let accelRate: Double = (self.travelMode == .drive || self.travelMode == .bus) ? 2.8 : 1.2
-                        let dt: TimeInterval = 0.25
-                        let maxSpeedDelta = accelRate * dt
-
-                        if self.smoothedVelocityMPS < targetSpeedMPS {
-                            self.smoothedVelocityMPS = min(targetSpeedMPS, self.smoothedVelocityMPS + maxSpeedDelta)
-                        } else if self.smoothedVelocityMPS > targetSpeedMPS {
-                            self.smoothedVelocityMPS = max(targetSpeedMPS, self.smoothedVelocityMPS - maxSpeedDelta)
-                        }
-
-                        // 2. Dynamic Velocity Vectors & Cadence Variation
-                        let speedJitter: Double
-                        if self.travelMode == .walk || self.travelMode == .sidewalk {
-                            // Authentic human stride cadence variance (±6%)
-                            let stepCadence = sin(cumulativeDistanceTraveled * 3.1) * 0.06
-                            speedJitter = 1.0 + stepCadence + Double.random(in: -0.025...0.025)
-                        } else if self.travelMode == .run {
-                            speedJitter = 1.0 + sin(cumulativeDistanceTraveled * 2.6) * 0.04 + Double.random(in: -0.02...0.02)
-                        } else {
-                            // Engine cruising variations
-                            speedJitter = 1.0 + Double.random(in: -0.03...0.03)
-                        }
-                        let liveSpeed = max(0.4, self.smoothedVelocityMPS * speedJitter)
-                        let stepDist = max(0.08, liveSpeed * dt)
-                        distanceInSegment = min(segDist, distanceInSegment + stepDist)
-                        distanceSinceLastLight += stepDist
-                        distanceSinceLastBusStop += stepDist
-                        cumulativeDistanceTraveled += stepDist
-
-                        let t = segDist > 0 ? (distanceInSegment / segDist) : 1.0
-                        var coord = CLLocationCoordinate2D(
-                            latitude: previous.latitude + (next.latitude - previous.latitude) * t,
-                            longitude: previous.longitude + (next.longitude - previous.longitude) * t
-                        )
-
-                        let segmentHeading = Self.bearing(from: previous, to: next)
-
-                        // For walking and sidewalk modes, apply subtle realistic lateral step sway (~0.18m)
-                        if (self.travelMode == .walk || self.travelMode == .sidewalk) && segDist > 2 {
-                            let swayMeters = sin(cumulativeDistanceTraveled * 2.4) * 0.18
-                            let earthRadius = 6378137.0
-                            let headingRad = segmentHeading * .pi / 180.0
-                            let latOffset = (swayMeters * cos(headingRad + .pi / 2)) / earthRadius * (180.0 / .pi)
-                            let lonOffset = (swayMeters * sin(headingRad + .pi / 2)) / (earthRadius * cos(coord.latitude * .pi / 180.0)) * (180.0 / .pi)
-                            coord.latitude += latOffset
-                            coord.longitude += lonOffset
-                        }
-
-                        // 3. Realistic GPS Signal Noise (Multipath & HDOP Jitter) for Life360 Motion Detection
-                        let finalCoord = self.life360RealismEnabled
-                            ? Self.applyGPSNoise(to: coord, headingDegrees: segmentHeading, speedMPS: liveSpeed)
-                            : coord
-
-                        let remainingInSegment = max(0, segDist - distanceInSegment)
-                        let remainingDistance = remainingInSegment + suffixDistances[idx + 1]
-                        let remainingTravel = RouteBuilder.estimatedDuration(distance: remainingDistance, speed: self.currentSpeedMPS)
-                        let remainingStops = pendingStops.reduce(0) { $0 + $1.stopDuration }
-
-                        // Slices for animated polyline progress
-                        let completedSlice = Array(coordinates[0...idx]) + [coord]
-                        let remainingSlice = [coord] + Array(coordinates[(idx + 1)...])
-
-                        await MainActor.run {
-                            self.apply(finalCoord, pairing: pairing, markRecent: false)
-                            self.routeProgress = min(1.0, max(0.0, 1.0 - (remainingDistance / max(1.0, totalRouteDistance))))
-                            self.remainingRouteDistance = remainingDistance
-                            self.remainingRouteDuration = remainingTravel + remainingStops
-                            self.completedRouteCoordinates = completedSlice
-                            self.remainingRouteCoordinates = remainingSlice
-                            if self.liveActivitiesEnabled {
-                                LiveActivityManager.shared.updateActivity(
-                                    progress: self.routeProgress,
-                                    remainingDistanceMeters: remainingDistance,
-                                    remainingDurationSeconds: self.remainingRouteDuration,
-                                    destinationName: self.routeDestinationName,
-                                    travelMode: self.travelMode,
-                                    speedFormatted: self.speedUnit.format(liveSpeed),
-                                    activeStopName: self.activeStopName,
-                                    isPaused: self.isRoutePaused
-                                )
-                            }
-                        }
-
-                        // Smart Traffic Lights: ONLY stop if we are near an actual street intersection / turn junction!
-                        if (self.travelMode == .drive || self.isCarModeActive || self.smartTrafficLights) && distanceSinceLastLight > 400 {
-                            if idx > 0 && idx < coordinates.count - 1 && Self.isIntersection(before: coordinates[idx - 1], at: coordinates[idx], after: coordinates[idx + 1]) {
-                                distanceSinceLastLight = 0
-                                if Double.random(in: 0...1) < 0.35 {
-                                    await self.performTrafficLightStop(pairing: pairing)
-                                }
-                            }
-                        }
-
-                        // Smart Bus Stops: only stop at detected public transit stops or junctions
-                        if (self.travelMode == .bus || self.isBusModeActive) && self.busModeSmartStops && distanceSinceLastBusStop > 350 {
-                            if idx > 0 && idx < coordinates.count - 1 && Self.isIntersection(before: coordinates[idx - 1], at: coordinates[idx], after: coordinates[idx + 1]) {
-                                distanceSinceLastBusStop = 0
-                                if Double.random(in: 0...1) < 0.45 {
-                                    await self.performBusStop(pairing: pairing)
-                                }
-                            }
-                        }
-
-                        try? await Task.sleep(nanoseconds: UInt64(dt * 1_000_000_000))
+                    if self.smoothedVelocityMPS < targetSpeedMPS {
+                        self.smoothedVelocityMPS = min(targetSpeedMPS, self.smoothedVelocityMPS + maxSpeedDelta)
+                    } else if self.smoothedVelocityMPS > targetSpeedMPS {
+                        self.smoothedVelocityMPS = max(targetSpeedMPS, self.smoothedVelocityMPS - maxSpeedDelta)
                     }
+
+                    // 2. Dynamic Velocity Vectors & Natural Cadence Variation
+                    let speedJitter: Double
+                    if self.travelMode == .walk || self.travelMode == .sidewalk {
+                        let stepCadence = sin(cumulativeDistanceTraveled * 3.1) * 0.02
+                        speedJitter = 1.0 + stepCadence + Double.random(in: -0.01...0.01)
+                    } else if self.travelMode == .run {
+                        speedJitter = 1.0 + sin(cumulativeDistanceTraveled * 2.6) * 0.015 + Double.random(in: -0.008...0.008)
+                    } else {
+                        speedJitter = 1.0 + Double.random(in: -0.01...0.01)
+                    }
+
+                    let liveSpeed = max(0.8, self.smoothedVelocityMPS * speedJitter)
+                    var stepDistRemaining = liveSpeed * actualElapsed
+                    let distanceTraveledThisStep = stepDistRemaining
+                    cumulativeDistanceTraveled += distanceTraveledThisStep
+                    distanceSinceLastLight += distanceTraveledThisStep
+                    distanceSinceLastBusStop += distanceTraveledThisStep
+
+                    // 3. Advance across polyline segments according to true physical displacement
+                    var reachedEnd = false
+                    while stepDistRemaining > 0 {
+                        let segDist = segmentDistances[currentSegmentIndex]
+                        let remainingInSeg = max(0.0, segDist - distanceInCurrentSegment)
+                        if stepDistRemaining < remainingInSeg {
+                            distanceInCurrentSegment += stepDistRemaining
+                            stepDistRemaining = 0
+                        } else {
+                            stepDistRemaining -= remainingInSeg
+                            if currentSegmentIndex < coordinates.count - 2 {
+                                currentSegmentIndex += 1
+                                distanceInCurrentSegment = 0.0
+                            } else {
+                                currentSegmentIndex = coordinates.count - 2
+                                distanceInCurrentSegment = segDist
+                                stepDistRemaining = 0
+                                reachedEnd = true
+                                break
+                            }
+                        }
+                    }
+
+                    let p0 = coordinates[currentSegmentIndex]
+                    let p1 = coordinates[currentSegmentIndex + 1]
+                    let curSegDist = max(0.001, segmentDistances[currentSegmentIndex])
+                    let t = min(1.0, max(0.0, distanceInCurrentSegment / curSegDist))
+                    var coord = CLLocationCoordinate2D(
+                        latitude: p0.latitude + (p1.latitude - p0.latitude) * t,
+                        longitude: p0.longitude + (p1.longitude - p0.longitude) * t
+                    )
+                    let segmentHeading = Self.bearing(from: p0, to: p1)
+
+                    // For walking and sidewalk modes, apply subtle realistic lateral step sway (~0.10m)
+                    if (self.travelMode == .walk || self.travelMode == .sidewalk) && curSegDist > 2 {
+                        let swayMeters = sin(cumulativeDistanceTraveled * 2.4) * 0.10
+                        let earthRadius = 6378137.0
+                        let headingRad = segmentHeading * .pi / 180.0
+                        let latOffset = (swayMeters * cos(headingRad + .pi / 2)) / earthRadius * (180.0 / .pi)
+                        let lonOffset = (swayMeters * sin(headingRad + .pi / 2)) / (earthRadius * cos(coord.latitude * .pi / 180.0)) * (180.0 / .pi)
+                        coord.latitude += latOffset
+                        coord.longitude += lonOffset
+                    }
+
+                    // 4. Realistic GPS Signal Noise preserving forward motion vector for Life360
+                    let finalCoord = self.life360RealismEnabled
+                        ? self.applyGPSNoise(to: coord, headingDegrees: segmentHeading, speedMPS: liveSpeed)
+                        : coord
+
+                    let remainingInCurSeg = max(0.0, segmentDistances[currentSegmentIndex] - distanceInCurrentSegment)
+                    let remainingDistance = remainingInCurSeg + suffixDistances[currentSegmentIndex + 1]
+                    let remainingTravel = RouteBuilder.estimatedDuration(distance: remainingDistance, speed: self.currentSpeedMPS)
+                    let remainingStops = pendingStops.reduce(0) { $0 + $1.stopDuration }
+
+                    // Slices for animated polyline progress
+                    let completedSlice = Array(coordinates[0...currentSegmentIndex]) + [coord]
+                    let remainingSlice = [coord] + Array(coordinates[(currentSegmentIndex + 1)...])
 
                     await MainActor.run {
-                        self.routeProgress = Double(idx + 1) / Double(totalSegments)
+                        self.applySimulatedMovement(finalCoord, pairing: pairing)
+                        self.routeProgress = min(1.0, max(0.0, 1.0 - (remainingDistance / max(1.0, totalRouteDistance))))
+                        self.remainingRouteDistance = remainingDistance
+                        self.remainingRouteDuration = remainingTravel + remainingStops
+                        self.completedRouteCoordinates = completedSlice
+                        self.remainingRouteCoordinates = remainingSlice
+                        if self.liveActivitiesEnabled {
+                            LiveActivityManager.shared.updateActivity(
+                                progress: self.routeProgress,
+                                remainingDistanceMeters: remainingDistance,
+                                remainingDurationSeconds: self.remainingRouteDuration,
+                                destinationName: self.routeDestinationName,
+                                travelMode: self.travelMode,
+                                speedFormatted: self.speedUnit.format(liveSpeed),
+                                activeStopName: self.activeStopName,
+                                isPaused: self.isRoutePaused
+                            )
+                        }
                     }
 
-                    // Check if 'next' coordinate matches a pending stop: SNAP TO EXACT COORDINATE
+                    // Check if coordinate matches a pending stop: snap and perform dwell stop
                     if let stopIdx = pendingStops.firstIndex(where: {
                         CLLocation(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude)
-                            .distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude)) < 15
+                            .distance(from: CLLocation(latitude: coord.latitude, longitude: coord.longitude)) < 15
                     }) {
                         let stop = pendingStops.remove(at: stopIdx)
                         await MainActor.run {
-                            self.apply(stop.coordinate, pairing: pairing, markRecent: false)
+                            self.applySimulatedMovement(stop.coordinate, pairing: pairing)
                         }
                         await self.performStop(stop, pairing: pairing)
-                        previous = stop.coordinate
-                    } else {
-                        previous = next
+                        lastEpochWallTime = CACurrentMediaTime()
                     }
+
+                    // Smart Traffic Lights: ONLY stop if enabled by user
+                    if (self.travelMode == .drive || self.isCarModeActive) && self.smartTrafficLights && distanceSinceLastLight > 500 {
+                        if currentSegmentIndex > 0 && currentSegmentIndex < coordinates.count - 1 &&
+                           Self.isIntersection(before: coordinates[currentSegmentIndex - 1], at: coordinates[currentSegmentIndex], after: coordinates[currentSegmentIndex + 1]) {
+                            distanceSinceLastLight = 0
+                            if Double.random(in: 0...1) < 0.30 {
+                                await self.performTrafficLightStop(pairing: pairing)
+                                lastEpochWallTime = CACurrentMediaTime()
+                            }
+                        }
+                    }
+
+                    // Smart Bus Stops: ONLY stop if enabled by user
+                    if (self.travelMode == .bus || self.isBusModeActive) && self.busModeSmartStops && distanceSinceLastBusStop > 450 {
+                        if currentSegmentIndex > 0 && currentSegmentIndex < coordinates.count - 1 &&
+                           Self.isIntersection(before: coordinates[currentSegmentIndex - 1], at: coordinates[currentSegmentIndex], after: coordinates[currentSegmentIndex + 1]) {
+                            distanceSinceLastBusStop = 0
+                            if Double.random(in: 0...1) < 0.35 {
+                                await self.performBusStop(pairing: pairing)
+                                lastEpochWallTime = CACurrentMediaTime()
+                            }
+                        }
+                    }
+
+                    if reachedEnd {
+                        break
+                    }
+
+                    // Standard 1.0s GPS epoch cadence matching Apple locationd
+                    let elapsedSoFar = CACurrentMediaTime() - epochStart
+                    let targetSleep = max(0.05, 1.0 - elapsedSoFar)
+                    try? await Task.sleep(nanoseconds: UInt64(targetSleep * 1_000_000_000))
                 }
+
                 if !loop || Task.isCancelled {
                     shouldContinue = false
                 }
             }
+
             await MainActor.run {
                 self.isFollowingRoute = false
                 self.isRoutePaused = false
@@ -740,6 +798,7 @@ final class SpoofSession: ObservableObject {
                 self.activeStopRemainingSeconds = nil
                 self.isTrafficLightStopActive = false
                 self.isBusStopActive = false
+                self.startResend(pairing: pairing)
 
                 if self.liveActivitiesEnabled {
                     LiveActivityManager.shared.endActivity(destinationName: self.routeDestinationName)
@@ -830,7 +889,7 @@ final class SpoofSession: ObservableObject {
         await MainActor.run {
             self.activeStopName = stopName
             self.activeStopRemainingSeconds = duration
-            self.apply(stop.coordinate, pairing: pairing, markRecent: false)
+            self.applySimulatedMovement(stop.coordinate, pairing: pairing)
             SoundManager.play(.dwell)
         }
 
@@ -843,13 +902,12 @@ final class SpoofSession: ObservableObject {
                 self.skipCurrentStopRequested = false
                 break
             }
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            elapsed += 0.25
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            elapsed += 1.0
             let remaining = max(0, duration - elapsed)
             await MainActor.run {
                 self.activeStopRemainingSeconds = remaining
-                // Firmly hold coordinate locked at exact stop location
-                self.apply(stop.coordinate, pairing: pairing, markRecent: false)
+                self.applySimulatedMovement(stop.coordinate, pairing: pairing)
             }
         }
 
@@ -860,7 +918,7 @@ final class SpoofSession: ObservableObject {
     }
 
     private func performTrafficLightStop(pairing: PairingStore) async {
-        let duration: Double = Double.random(in: 15...25)
+        let duration: Double = Double.random(in: 12...20)
         await MainActor.run {
             self.isTrafficLightStopActive = true
             self.activeStopName = "Traffic Light"
@@ -877,11 +935,14 @@ final class SpoofSession: ObservableObject {
                 self.skipCurrentStopRequested = false
                 break
             }
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            elapsed += 0.25
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            elapsed += 1.0
             let remaining = max(0, duration - elapsed)
             await MainActor.run {
                 self.activeStopRemainingSeconds = remaining
+                if let sim = self.simulated {
+                    self.applySimulatedMovement(sim, pairing: pairing)
+                }
             }
         }
 
@@ -893,7 +954,7 @@ final class SpoofSession: ObservableObject {
     }
 
     private func performBusStop(pairing: PairingStore) async {
-        let duration: Double = Double.random(in: 14...20)
+        let duration: Double = Double.random(in: 10...16)
         await MainActor.run {
             self.isBusStopActive = true
             self.activeStopName = "Bus Passenger Stop"
@@ -910,11 +971,14 @@ final class SpoofSession: ObservableObject {
                 self.skipCurrentStopRequested = false
                 break
             }
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            elapsed += 0.25
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            elapsed += 1.0
             let remaining = max(0, duration - elapsed)
             await MainActor.run {
                 self.activeStopRemainingSeconds = remaining
+                if let sim = self.simulated {
+                    self.applySimulatedMovement(sim, pairing: pairing)
+                }
             }
         }
 
@@ -1034,25 +1098,21 @@ final class SpoofSession: ObservableObject {
     }
 
     /// Injects realistic GPS measurement noise (multipath + atmospheric dilution of precision)
-    /// with cross-track and along-track jitter along the current velocity vector.
-    static func applyGPSNoise(
+    /// with continuous Gauss-Markov drift that preserves true kinematic velocity and heading for Life360.
+    func applyGPSNoise(
         to coordinate: CLLocationCoordinate2D,
         headingDegrees: Double,
         speedMPS: Double
     ) -> CLLocationCoordinate2D {
-        // Orthogonal Gaussian-like noise (Box-Muller transform)
-        let u1 = max(1e-6, Double.random(in: 0...1))
-        let u2 = Double.random(in: 0...1)
-        let z0 = sqrt(-2.0 * log(u1)) * cos(2.0 * .pi * u2)
-        let z1 = sqrt(-2.0 * log(u1)) * sin(2.0 * .pi * u2)
-
-        // Lateral cross-track noise (~0.35m) and along-track noise (~0.20m)
-        let crossTrackNoise = z0 * 0.35
-        let alongTrackNoise = z1 * 0.20
+        // Continuous 1st-order Gauss-Markov drift (tau ~ 8s): avoids erratic jumps, preserves velocity vector
+        persistentCrossTrackError = (persistentCrossTrackError * 0.85) + Double.random(in: -0.04...0.04)
+        persistentAlongTrackError = (persistentAlongTrackError * 0.85) + Double.random(in: -0.02...0.02)
+        persistentCrossTrackError = max(-0.20, min(0.20, persistentCrossTrackError))
+        persistentAlongTrackError = max(-0.10, min(0.10, persistentAlongTrackError))
 
         let headingRad = headingDegrees * .pi / 180.0
-        let eastMeters = alongTrackNoise * sin(headingRad) + crossTrackNoise * cos(headingRad)
-        let northMeters = alongTrackNoise * cos(headingRad) - crossTrackNoise * sin(headingRad)
+        let eastMeters = persistentAlongTrackError * sin(headingRad) + persistentCrossTrackError * cos(headingRad)
+        let northMeters = persistentAlongTrackError * cos(headingRad) - persistentCrossTrackError * sin(headingRad)
 
         let earthRadius = 6378137.0
         let dLat = (northMeters / earthRadius) * (180.0 / .pi)
@@ -1078,6 +1138,32 @@ final class SpoofSession: ObservableObject {
         return false
     }
 
+    func applySimulatedMovement(_ coordinate: CLLocationCoordinate2D, pairing: PairingStore) {
+        let result = LocationEngine.set(
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude,
+            pairingPath: pairing.pairingPath,
+            deviceIP: TunnelConfig.targetIP
+        )
+        switch result {
+        case .success:
+            simulated = coordinate
+            pin = coordinate
+            if status != .active {
+                status = .active
+            }
+            lastError = nil
+        case .failure(let error):
+            lastError = error.localizedDescription
+            if simulated != nil {
+                status = .dropped(error.localizedDescription)
+                postDropNotification(error.localizedDescription)
+            } else {
+                status = .idle
+            }
+        }
+    }
+
     private func apply(_ coordinate: CLLocationCoordinate2D, pairing: PairingStore, markRecent: Bool) {
         if status == .idle || status.isDropped {
             status = .connecting
@@ -1098,6 +1184,7 @@ final class SpoofSession: ObservableObject {
             lastError = nil
             beginBackground()
             locationKeeper.start()
+            audioKeeper.start()
             startResend(pairing: pairing)
             startHealth(pairing: pairing)
             if markRecent {
@@ -1118,41 +1205,43 @@ final class SpoofSession: ObservableObject {
         guard joystickActive, let current = simulated else { return }
         let magnitude = hypot(joystickVector.dx, joystickVector.dy)
         guard magnitude > 0.08 else {
-            smoothedVelocityMPS = max(0.0, smoothedVelocityMPS - 0.5)
+            smoothedVelocityMPS = max(0.0, smoothedVelocityMPS - 1.5)
             return
         }
         let nx = joystickVector.dx / magnitude
         let ny = -joystickVector.dy / magnitude
 
-        // Kinematic joystick acceleration smoothing
+        // Kinematic joystick velocity
         let targetSpeed = currentSpeedMPS * min(1.0, magnitude)
-        smoothedVelocityMPS = smoothedVelocityMPS * 0.70 + targetSpeed * 0.30
-        let liveSpeed = max(0.35, smoothedVelocityMPS * Double.random(in: 0.96...1.04))
-        let dt = 0.25
+        smoothedVelocityMPS = smoothedVelocityMPS * 0.40 + targetSpeed * 0.60
+        let liveSpeed = max(0.8, smoothedVelocityMPS * Double.random(in: 0.98...1.02))
+        let dt: Double = 1.0
         let meters = liveSpeed * dt
 
         let headingDeg = (atan2(nx, ny) * 180.0 / .pi + 360.0).truncatingRemainder(dividingBy: 360.0)
         let nextRaw = offset(coordinate: current, eastMeters: nx * meters, northMeters: ny * meters)
         let nextNoisy = life360RealismEnabled
-            ? Self.applyGPSNoise(to: nextRaw, headingDegrees: headingDeg, speedMPS: liveSpeed)
+            ? applyGPSNoise(to: nextRaw, headingDegrees: headingDeg, speedMPS: liveSpeed)
             : nextRaw
 
-        apply(nextNoisy, pairing: pairing, markRecent: false)
+        applySimulatedMovement(nextNoisy, pairing: pairing)
     }
 
     private func startResend(pairing: PairingStore) {
         resendTimer?.invalidate()
-        // 2.0s high-frequency keepalive with 2D Brownian random walk to prevent Life360 0mph timeouts
-        resendTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        guard !isFollowingRoute && !joystickActive else { return }
+        // 2.5s high-frequency keepalive with 2D Brownian random walk to prevent Life360 0mph timeouts
+        let timer = Timer(timeInterval: 2.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let sim = self.simulated else { return }
+                guard !self.isFollowingRoute && !self.joystickActive else { return }
                 var targetCoord = sim
-                if self.stationaryDriftEnabled && !self.isFollowingRoute && !self.joystickActive {
+                if self.stationaryDriftEnabled {
                     // 2D Brownian drift with restorative spring pulling back toward base anchor
-                    let driftStepEast = Double.random(in: -0.25...0.25) - (self.cumulativeDriftEast * 0.22)
-                    let driftStepNorth = Double.random(in: -0.25...0.25) - (self.cumulativeDriftNorth * 0.22)
-                    self.cumulativeDriftEast = min(1.2, max(-1.2, self.cumulativeDriftEast + driftStepEast))
-                    self.cumulativeDriftNorth = min(1.2, max(-1.2, self.cumulativeDriftNorth + driftStepNorth))
+                    let driftStepEast = Double.random(in: -0.15...0.15) - (self.cumulativeDriftEast * 0.25)
+                    let driftStepNorth = Double.random(in: -0.15...0.15) - (self.cumulativeDriftNorth * 0.25)
+                    self.cumulativeDriftEast = min(0.8, max(-0.8, self.cumulativeDriftEast + driftStepEast))
+                    self.cumulativeDriftNorth = min(0.8, max(-0.8, self.cumulativeDriftNorth + driftStepNorth))
                     targetCoord = self.offset(coordinate: sim, eastMeters: self.cumulativeDriftEast, northMeters: self.cumulativeDriftNorth)
                 }
                 _ = LocationEngine.set(
@@ -1163,6 +1252,8 @@ final class SpoofSession: ObservableObject {
                 )
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        resendTimer = timer
     }
 
     private func stopResend() {
