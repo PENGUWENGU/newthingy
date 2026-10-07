@@ -154,35 +154,39 @@ struct TransitRouteBannerView: View {
                 }
 
                 if !isCollapsed {
-                    // Route Progress Bar
-                    VStack(spacing: 4) {
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Capsule()
-                                    .fill(Color.primary.opacity(0.12))
-                                    .frame(height: 6)
+                    // Rich Live Activity Progress Bar with Moving Mode Badge
+                    GeometryReader { geo in
+                        let clamped = CGFloat(min(1.0, max(0.0, session.routeProgress)))
+                        ZStack(alignment: .leading) {
+                            Capsule()
+                                .fill(Color.primary.opacity(0.14))
+                                .frame(height: 8)
 
-                                Capsule()
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [LocusTheme.accent, LocusTheme.accentSecondary],
-                                            startPoint: .leading,
-                                            endPoint: .trailing
-                                        )
+                            Capsule()
+                                .fill(
+                                    LinearGradient(
+                                        colors: [LocusTheme.accent, LocusTheme.accentSecondary],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
                                     )
-                                    .frame(width: max(8, geo.size.width * CGFloat(session.routeProgress)), height: 6)
+                                )
+                                .frame(width: max(14, geo.size.width * clamped), height: 8)
 
+                            ZStack {
                                 Circle()
-                                    .fill(Color.white)
-                                    .frame(width: 12, height: 12)
-                                    .shadow(color: LocusTheme.accent.opacity(0.8), radius: 4)
-                                    .offset(x: max(0, min(geo.size.width - 12, (geo.size.width * CGFloat(session.routeProgress)) - 6)))
+                                    .fill(LocusTheme.accent)
+                                    .frame(width: 24, height: 24)
+                                    .shadow(color: LocusTheme.accent.opacity(0.75), radius: 5, y: 1)
+                                Image(systemName: session.travelMode.icon)
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.black)
                             }
+                            .offset(x: max(0, min(geo.size.width - 24, (geo.size.width - 24) * clamped)))
                         }
-                        .frame(height: 12)
                     }
+                    .frame(height: 24)
 
-                    // ETA & Duration Line
+                    // ETA, Distance & Duration Line
                     HStack(alignment: .center) {
                         HStack(spacing: 4) {
                             Image(systemName: "mappin.circle.fill")
@@ -196,7 +200,7 @@ struct TransitRouteBannerView: View {
                         Spacer()
 
                         Text(remainingDurationString)
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.system(size: 13, weight: .heavy))
                             .foregroundStyle(LocusTheme.accent)
                     }
 

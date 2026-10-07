@@ -628,37 +628,37 @@ struct MapHomeView: View {
 
     @ViewBuilder
     private var routeControlPanel: some View {
-        VStack(spacing: 8) {
-            if session.isFollowingRoute {
-                TransitRouteBannerView(
-                    session: session,
-                    onTogglePause: {
-                        SoundManager.play(.toggle)
-                        withAnimation {
-                            session.togglePauseRoute()
-                        }
-                    },
-                    onStop: {
-                        SoundManager.play(.alert)
-                        showEndSpoofConfirmation = true
-                    },
-                    onSkipStop: {
-                        SoundManager.play(.tap)
-                        session.skipStop()
-                    },
-                    onOpenPlanner: {
-                        SoundManager.play(.tap)
-                        showRouteSheet = true
+        if session.isFollowingRoute {
+            TransitRouteBannerView(
+                session: session,
+                onTogglePause: {
+                    SoundManager.play(.toggle)
+                    withAnimation {
+                        session.togglePauseRoute()
                     }
-                )
-            } else {
+                },
+                onStop: {
+                    SoundManager.play(.alert)
+                    showEndSpoofConfirmation = true
+                },
+                onSkipStop: {
+                    SoundManager.play(.tap)
+                    session.skipStop()
+                },
+                onOpenPlanner: {
+                    SoundManager.play(.tap)
+                    showRouteSheet = true
+                }
+            )
+        } else {
+            VStack(spacing: 8) {
                 routeMethodSwitcher
                 routeSummaryActionBar
             }
+            .padding(12)
+            .locusGlass(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
-        .padding(12)
-        .locusGlass(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var routeMethodSwitcher: some View {

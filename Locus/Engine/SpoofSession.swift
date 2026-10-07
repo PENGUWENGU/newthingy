@@ -293,6 +293,61 @@ final class SpoofSession: ObservableObject {
         ThemePreference.showWaypointLabels = show
     }
 
+    func applyThemeConfiguration(
+        accentTheme: AccentColorTheme,
+        primaryHex: String,
+        secondaryHex: String,
+        textColorHex: String,
+        isCustomTextColorEnabled: Bool,
+        menuTintHex: String,
+        isMenuTintEnabled: Bool,
+        glassTintHex: String,
+        isGlassTintEnabled: Bool,
+        completionFlashHex: String,
+        pathWidth: PathWidthPreference,
+        uiAppearance: UIAppearanceStyle,
+        showWaypointLabels: Bool
+    ) {
+        self.customPrimaryHex = primaryHex
+        ThemePreference.customPrimaryHex = primaryHex
+
+        self.customSecondaryHex = secondaryHex
+        ThemePreference.customSecondaryHex = secondaryHex
+
+        self.accentTheme = accentTheme
+        ThemePreference.accent = accentTheme
+
+        self.customTextColorHex = textColorHex
+        ThemePreference.customTextColorHex = textColorHex
+        self.isCustomTextColorEnabled = isCustomTextColorEnabled
+        ThemePreference.isCustomTextColorEnabled = isCustomTextColorEnabled
+
+        self.customMenuTintHex = menuTintHex
+        ThemePreference.customMenuTintHex = menuTintHex
+        self.isMenuTintEnabled = isMenuTintEnabled
+        ThemePreference.isMenuTintEnabled = isMenuTintEnabled
+
+        self.glassTintHex = glassTintHex
+        ThemePreference.glassTintHex = glassTintHex
+        self.isGlassTintEnabled = isGlassTintEnabled
+        ThemePreference.hasCustomGlassTint = isGlassTintEnabled
+
+        self.completionFlashHex = completionFlashHex
+        ThemePreference.completionFlashHex = completionFlashHex
+
+        self.pathWidth = pathWidth
+        ThemePreference.pathWidth = pathWidth
+
+        self.uiAppearance = uiAppearance
+        ThemePreference.appearance = uiAppearance
+
+        self.showWaypointLabels = showWaypointLabels
+        ThemePreference.showWaypointLabels = showWaypointLabels
+
+        self.themeVersion += 1
+        self.objectWillChange.send()
+    }
+
     var isSpoofing: Bool {
         if case .active = status { return true }
         if case .reconnecting = status { return true }
@@ -305,14 +360,7 @@ final class SpoofSession: ObservableObject {
     /// `travelMode` still independently decides the road-routing transport type
     /// (walking vs. driving directions) — that's unaffected by a custom speed.
     var currentSpeedMPS: CLLocationSpeed {
-        let base = customSpeedMPS ?? travelMode.baseSpeed
-        // Life360 requires speeds strictly over 15 mph (6.7 m/s) to display real-time movement and active driving.
-        // When life360SpeedBoost is enabled and the mode speed is under 16 mph, boost to 17.5 mph (7.82 m/s)
-        // so Life360 reliably detects movement instead of reporting 0 mph.
-        if life360RealismEnabled && life360SpeedBoost && base < 7.15 {
-            return 7.82 // ~17.5 mph
-        }
-        return base
+        customSpeedMPS ?? travelMode.baseSpeed
     }
 
     /// Switches travel mode and clears any custom speed override so the new mode's speed is used immediately.

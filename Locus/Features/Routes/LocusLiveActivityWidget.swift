@@ -142,43 +142,35 @@ struct LocusLiveActivityWidgetView: View {
                 }
             }
 
-            // Big Rich Progress Bar Track with Moving Walker/Vehicle Glyph
-            GeometryReader { geo in
-                let trackWidth = geo.size.width
-                let progressClamped = CGFloat(min(1.0, max(0.0, state.progress)))
+            // WidgetKit-safe Progress Track with Glowing Fill & Mode Badge
+            let progressClamped = min(1.0, max(0.0, state.progress))
+            let stopLoc = max(0.02, min(0.99, progressClamped))
 
+            HStack(spacing: 10) {
                 ZStack(alignment: .leading) {
-                    // Track Background
-                    Capsule()
-                        .fill(Color.white.opacity(0.16))
-                        .frame(height: 8)
-
-                    // Active Glowing Progress Track
                     Capsule()
                         .fill(
                             LinearGradient(
-                                colors: [badgeColor.opacity(0.8), badgeColor],
+                                stops: [
+                                    .init(color: badgeColor.opacity(0.85), location: 0.0),
+                                    .init(color: badgeColor, location: stopLoc),
+                                    .init(color: Color.white.opacity(0.16), location: min(1.0, stopLoc + 0.005)),
+                                    .init(color: Color.white.opacity(0.16), location: 1.0)
+                                ],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
                         )
-                        .frame(width: max(16, trackWidth * progressClamped), height: 8)
+                        .frame(height: 10)
+                }
 
-                    // Moving Walker / Vehicle Badge along track
-                    HStack(spacing: 0) {
-                        Spacer()
-                            .frame(width: max(0, (trackWidth - 26) * progressClamped))
-
-                        ZStack {
-                            Circle()
-                                .fill(badgeColor)
-                                .frame(width: 26, height: 26)
-                                .shadow(color: badgeColor.opacity(0.7), radius: 5, y: 1)
-                            Image(systemName: state.travelModeIcon)
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(.white)
-                        }
-                    }
+                ZStack {
+                    Circle()
+                        .fill(badgeColor)
+                        .frame(width: 26, height: 26)
+                    Image(systemName: state.travelModeIcon)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.black)
                 }
             }
             .frame(height: 26)
@@ -205,19 +197,15 @@ struct LocusLiveActivityWidgetView: View {
 
                     Text(state.remainingTimeText)
                         .font(.system(size: 14, weight: .heavy))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(badgeColor)
                 }
             }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 16)
         .background(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(Color(red: 0.12, green: 0.08, blue: 0.05).opacity(0.96))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                        .strokeBorder(badgeColor.opacity(0.4), lineWidth: 1.2)
-                )
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color(red: 0.10, green: 0.09, blue: 0.08).opacity(0.96))
         )
     }
 }
@@ -226,35 +214,45 @@ struct LocusLiveActivityWidgetView: View {
 struct LocusRouteLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: LocusRouteActivityAttributes.self) { context in
-            // Lock Screen and Notification Center Widget
             LocusLiveActivityWidgetView(context: context)
+                .activityBackgroundTint(Color(red: 0.10, green: 0.09, blue: 0.08))
+                .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 6) {
                         Image(systemName: context.state.travelModeIcon)
                             .foregroundStyle(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: .orange))
                         Text(context.state.statusTitle)
-                            .font(.headline.weight(.heavy))
+                            .font(.subheadline.weight(.heavy))
+                            .lineLimit(1)
                     }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text(context.state.arrivalText)
-                        .font(.subheadline.weight(.bold))
+                    Text(context.state.currentSpeedFormatted)
+                        .font(.caption.monospacedDigit().weight(.bold))
+                        .foregroundStyle(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: .orange))
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    HStack {
-                        if !context.state.remainingDistanceText.isEmpty && !context.state.isCompleted {
-                            Text(context.state.remainingDistanceText)
-                                .font(.caption.weight(.semibold))
+                    VStack(spacing: 6) {
+                        ProgressView(value: min(1.0, max(0.0, context.state.progress)))
+                            .tint(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: .orange))
+                        HStack {
+                            Text(context.state.arrivalText)
+                                .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.secondary)
+                            Spacer()
+                            if !context.state.remainingDistanceText.isEmpty && !context.state.isCompleted {
+                                Text("\(context.state.remainingDistanceText) • \(context.state.remainingTimeText)")
+                                    .font(.caption2.weight(.bold))
+                            } else {
+                                Text(context.state.remainingTimeText)
+                                    .font(.caption2.weight(.bold))
+                            }
                         }
-                        Spacer()
-                        Text(context.state.remainingTimeText)
-                            .font(.caption.weight(.bold))
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 2)
                 }
             } compactLeading: {
                 Image(systemName: context.state.travelModeIcon)
@@ -262,6 +260,7 @@ struct LocusRouteLiveActivityWidget: Widget {
             } compactTrailing: {
                 Text(context.state.remainingTimeText)
                     .font(.caption2.weight(.bold))
+                    .foregroundStyle(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: .orange))
             } minimal: {
                 Image(systemName: context.state.travelModeIcon)
                     .foregroundStyle(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: .orange))

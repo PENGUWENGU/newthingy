@@ -99,51 +99,42 @@ struct SettingsView: View {
 
                 Section {
                     Button {
+                        SoundManager.play(.tap)
                         showThemeCustomizer = true
                     } label: {
-                        HStack {
-                            Label("Customize Appearance", systemImage: "paintpalette.fill")
-                                .foregroundStyle(.primary)
-                            Spacer()
-                            HStack(spacing: 6) {
+                        HStack(spacing: 12) {
+                            ZStack {
                                 Circle()
-                                    .fill(session.accentTheme.primaryColor)
-                                    .frame(width: 14, height: 14)
-                                Text(session.accentTheme.rawValue.components(separatedBy: " ").first ?? "")
-                                    .foregroundStyle(.secondary)
-                                Image(systemName: "chevron.right")
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(.secondary)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [session.primaryAccentColor, session.secondaryAccentColor],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .frame(width: 38, height: 38)
+                                Image(systemName: "paintpalette.fill")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundStyle(.black)
                             }
-                            .font(.subheadline)
-                        }
-                    }
 
-                    Picker("Accent Theme", selection: Binding(
-                        get: { session.accentTheme },
-                        set: { session.setAccentTheme($0) }
-                    )) {
-                        ForEach(AccentColorTheme.allCases) { theme in
-                            Text(theme.rawValue).tag(theme)
-                        }
-                    }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Open Interactive Theme Studio")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(.primary)
+                                Text("\(session.accentTheme.rawValue) • \(session.pathWidth.rawValue) • \(session.uiAppearance.rawValue)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
 
-                    Picker("Route Line Thickness", selection: Binding(
-                        get: { session.pathWidth },
-                        set: { session.setPathWidth($0) }
-                    )) {
-                        ForEach(PathWidthPreference.allCases) { width in
-                            Text(width.rawValue).tag(width)
-                        }
-                    }
+                            Spacer()
 
-                    Picker("UI Style", selection: Binding(
-                        get: { session.uiAppearance },
-                        set: { session.setUIAppearance($0) }
-                    )) {
-                        ForEach(UIAppearanceStyle.allCases) { style in
-                            Text(style.rawValue).tag(style)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.secondary)
                         }
+                        .padding(.vertical, 4)
                     }
 
                     Toggle("Button Audio Feedback", isOn: Binding(
@@ -153,7 +144,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Appearance & Feedback")
                 } footer: {
-                    Text("Customize the accent color, path thickness, liquid glass styling, and UI sound effects.")
+                    Text("Preview custom colors, route line geometry, glass materials, and completion flash effects in an interactive live sandbox before saving.")
                 }
 
                 Section {
@@ -194,14 +185,6 @@ struct SettingsView: View {
                             UserDefaults.standard.set($0, forKey: "locus.life360Realism")
                         }
                     ))
-                    Toggle("Life360 Drive Detection Floor (≥ 18 mph)", isOn: Binding(
-                        get: { session.life360SpeedBoost },
-                        set: {
-                            session.life360SpeedBoost = $0
-                            UserDefaults.standard.set($0, forKey: "locus.life360SpeedBoost")
-                            session.updateRemainingRouteDuration()
-                        }
-                    ))
                     Toggle("Stationary Micro-Drift", isOn: Binding(
                         get: { session.stationaryDriftEnabled },
                         set: {
@@ -212,7 +195,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Movement & Spoof Realism")
                 } footer: {
-                    Text("1.0 Hz continuous polyline traversal, Gauss-Markov kinematic drift, and the ≥18 mph Drive Detection Floor ensure tracking apps like Life360 accurately register real-time speed and active drives instead of showing 0 mph.")
+                    Text("1.0 Hz continuous polyline traversal, Gauss-Markov kinematic drift, and stationary micro-drift ensure tracking apps like Life360 accurately register real-time speed for every mode instead of showing 0 mph.")
                 }
 
                 Section {

@@ -36,8 +36,9 @@ final class LiveActivityManager {
         #if canImport(ActivityKit)
         guard #available(iOS 16.1, *) else { return }
 
-        // End any previous activity
-        endActivity(destinationName: destinationName)
+        // Synchronously detach previous activity reference so its async end never clears the new activity
+        let oldActivity = self.currentActivity as? Activity<LocusRouteActivityAttributes>
+        self.currentActivity = nil
 
         let eta = Date().addingTimeInterval(initialRemainingSeconds)
         let formatter = DateFormatter()
@@ -47,13 +48,14 @@ final class LiveActivityManager {
         let initialMinutes = max(1, Int(ceil(initialRemainingSeconds / 60.0)))
         let durationStr = formatRemainingDuration(initialRemainingSeconds)
         let distanceStr = formatDistance(routeDistanceMeters)
-        let countdownStr = "Go in \(initialMinutes) minutes"
+        let countdownStr = "Go in \(initialMinutes) min\(initialMinutes == 1 ? "" : "s")"
+        let accentHex = ThemePreference.accent.primaryColor.toHex()
 
         let state = LocusRouteActivityAttributes.ContentState(
             statusTitle: countdownStr,
             statusSubtitle: "\(travelMode.title) • \(destinationName)",
             badgeNumber: travelMode == .bus ? "234" : nil,
-            badgeColorHex: travelMode == .bus ? "#FF9500" : "#0A84FF",
+            badgeColorHex: travelMode == .bus ? "#FF9500" : accentHex,
             progress: 0.0,
             departureCountdownText: countdownStr,
             arrivalText: arrivalStr,
@@ -72,15 +74,23 @@ final class LiveActivityManager {
             targetDestinationName: destinationName
         )
 
-        do {
-            let activity = try Activity<LocusRouteActivityAttributes>.request(
-                attributes: attributes,
-                content: .init(state: state, staleDate: Date().addingTimeInterval(3600)),
-                pushType: nil
-            )
-            self.currentActivity = activity
-        } catch {
-            print("[LiveActivityManager] Failed to start ActivityKit Live Activity: \(error.localizedDescription)")
+        Task { @MainActor in
+            if let oldActivity {
+                await oldActivity.end(nil, dismissalPolicy: .immediate)
+            }
+            for stale in Activity<LocusRouteActivityAttributes>.activities {
+                await stale.end(nil, dismissalPolicy: .immediate)
+            }
+            do {
+                let activity = try Activity<LocusRouteActivityAttributes>.request(
+                    attributes: attributes,
+                    content: .init(state: state, staleDate: Date().addingTimeInterval(3600)),
+                    pushType: nil
+                )
+                self.currentActivity = activity
+            } catch {
+                print("[LiveActivityManager] Failed to start ActivityKit Live Activity: \(error.localizedDescription)")
+            }
         }
         #endif
     }
@@ -96,7 +106,13 @@ final class LiveActivityManager {
         isPaused: Bool = false
     ) {
         #if canImport(ActivityKit)
-        guard #available(iOS 16.1, *), let activity = currentActivity as? Activity<LocusRouteActivityAttributes> else { return }
+        guard #available(iOS 16.1, *) else { return }
+        let resolvedActivity = (currentActivity as? Activity<LocusRouteActivityAttributes>)
+            ?? Activity<LocusRouteActivityAttributes>.activities.first
+        guard let activity = resolvedActivity else { return }
+        if currentActivity == nil {
+            currentActivity = activity
+        }
 
         let eta = Date().addingTimeInterval(remainingDurationSeconds)
         let formatter = DateFormatter()
@@ -106,6 +122,7 @@ final class LiveActivityManager {
         let minutesLeft = max(1, Int(ceil(remainingDurationSeconds / 60.0)))
         let durationStr = formatRemainingDuration(remainingDurationSeconds)
         let distanceStr = formatDistance(remainingDistanceMeters)
+        let accentHex = ThemePreference.accent.primaryColor.toHex()
 
         let title: String
         let subtitle: String
@@ -117,15 +134,15 @@ final class LiveActivityManager {
             title = "Arriving now"
             subtitle = destinationName
         } else {
-            title = "Go in \(minutesLeft) minutes"
-            subtitle = "\(travelMode.title) • in \(minutesLeft) minutes"
+            title = "Go in \(minutesLeft) min\(minutesLeft == 1 ? "" : "s")"
+            subtitle = "\(travelMode.title) • \(destinationName)"
         }
 
         let state = LocusRouteActivityAttributes.ContentState(
             statusTitle: title,
             statusSubtitle: subtitle,
             badgeNumber: travelMode == .bus ? "234" : nil,
-            badgeColorHex: travelMode == .bus ? "#FF9500" : "#0A84FF",
+            badgeColorHex: travelMode == .bus ? "#FF9500" : accentHex,
             progress: min(1.0, max(0.0, progress)),
             departureCountdownText: title,
             arrivalText: arrivalStr,
@@ -146,7 +163,11 @@ final class LiveActivityManager {
 
     func endActivity(destinationName: String = "Destination") {
         #if canImport(ActivityKit)
-        guard #available(iOS 16.1, *), let activity = currentActivity as? Activity<LocusRouteActivityAttributes> else { return }
+        guard #available(iOS 16.1, *) else { return }
+        let activityToEnd = (currentActivity as? Activity<LocusRouteActivityAttributes>)
+            ?? Activity<LocusRouteActivityAttributes>.activities.first
+        self.currentActivity = nil
+        guard let activity = activityToEnd else { return }
 
         let finalState = LocusRouteActivityAttributes.ContentState(
             statusTitle: "Route Completed!",
@@ -166,8 +187,7 @@ final class LiveActivityManager {
         )
 
         Task {
-            await activity.end(.init(state: finalState, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(30)))
-            self.currentActivity = nil
+            await activity.end(.init(state: finalState, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(15)))
         }
         #endif
     }
