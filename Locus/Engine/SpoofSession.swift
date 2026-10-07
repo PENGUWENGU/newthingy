@@ -73,6 +73,7 @@ final class SpoofSession: ObservableObject {
     @Published var joystickActive = false
     @Published var isFollowingRoute = false
     @Published var isRoutePaused = false
+    @Published var liveSpeedMPS: Double = 0.0
     @Published var routeProgress: Double = 0.0
     @Published var remainingRouteDistance: CLLocationDistance = 0.0
     @Published var remainingRouteDuration: TimeInterval = 0.0
@@ -403,6 +404,7 @@ final class SpoofSession: ObservableObject {
         routeTask = nil
         isFollowingRoute = false
         isRoutePaused = false
+        liveSpeedMPS = 0.0
         routeProgress = 0.0
         remainingRouteDistance = 0.0
         remainingRouteDuration = 0.0
@@ -419,6 +421,7 @@ final class SpoofSession: ObservableObject {
     func pauseRoute() {
         guard isFollowingRoute && !isRoutePaused else { return }
         isRoutePaused = true
+        liveSpeedMPS = 0.0
         if liveActivitiesEnabled {
             LiveActivityManager.shared.updateActivity(
                 progress: routeProgress,
@@ -426,7 +429,7 @@ final class SpoofSession: ObservableObject {
                 remainingDurationSeconds: remainingRouteDuration,
                 destinationName: routeDestinationName,
                 travelMode: travelMode,
-                speedFormatted: speedUnit.format(currentSpeedMPS),
+                speedFormatted: speedUnit.format(0),
                 activeStopName: activeStopName,
                 isPaused: true
             )
@@ -512,6 +515,7 @@ final class SpoofSession: ObservableObject {
     func stopJoystick(pairing: PairingStore? = nil) {
         joystickActive = false
         joystickVector = .zero
+        liveSpeedMPS = 0.0
         joystickTimer?.invalidate()
         joystickTimer = nil
         if let pairing, !isFollowingRoute {
@@ -547,6 +551,7 @@ final class SpoofSession: ObservableObject {
 
         // Immediately begin with cruising velocity for realistic motion detection
         smoothedVelocityMPS = currentSpeedMPS
+        liveSpeedMPS = currentSpeedMPS
 
         let totalRouteDistance = RouteBuilder.totalDistance(of: coordinates)
         activeRouteTotalDistance = totalRouteDistance
@@ -717,6 +722,7 @@ final class SpoofSession: ObservableObject {
 
                     await MainActor.run {
                         self.applySimulatedMovement(finalCoord, pairing: pairing)
+                        self.liveSpeedMPS = liveSpeed
                         self.routeProgress = min(1.0, max(0.0, 1.0 - (remainingDistance / max(1.0, totalRouteDistance))))
                         self.remainingRouteDistance = remainingDistance
                         self.remainingRouteDuration = remainingTravel + remainingStops
@@ -791,6 +797,7 @@ final class SpoofSession: ObservableObject {
             await MainActor.run {
                 self.isFollowingRoute = false
                 self.isRoutePaused = false
+                self.liveSpeedMPS = 0.0
                 self.routeProgress = 1.0
                 self.remainingRouteDistance = 0.0
                 self.remainingRouteDuration = 0.0
@@ -1206,6 +1213,7 @@ final class SpoofSession: ObservableObject {
         let magnitude = hypot(joystickVector.dx, joystickVector.dy)
         guard magnitude > 0.08 else {
             smoothedVelocityMPS = max(0.0, smoothedVelocityMPS - 1.5)
+            liveSpeedMPS = smoothedVelocityMPS
             return
         }
         let nx = joystickVector.dx / magnitude
@@ -1215,6 +1223,7 @@ final class SpoofSession: ObservableObject {
         let targetSpeed = currentSpeedMPS * min(1.0, magnitude)
         smoothedVelocityMPS = smoothedVelocityMPS * 0.40 + targetSpeed * 0.60
         let liveSpeed = max(0.8, smoothedVelocityMPS * Double.random(in: 0.98...1.02))
+        liveSpeedMPS = liveSpeed
         let dt: Double = 1.0
         let meters = liveSpeed * dt
 

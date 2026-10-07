@@ -273,7 +273,10 @@ struct TransitRouteBannerView: View {
     }
 
     private var subHeaderDetail: String {
-        let speedText = session.speedUnit.format(session.currentSpeedMPS)
+        let effectiveSpeed = (session.isRoutePaused || session.activeStopName != nil)
+            ? 0.0
+            : (session.liveSpeedMPS > 0.1 ? session.liveSpeedMPS : session.currentSpeedMPS)
+        let speedText = session.speedUnit.format(effectiveSpeed)
         let distText = RouteBuilder.formattedDistance(session.remainingRouteDistance)
         return "\(distText) left • \(speedText)"
     }

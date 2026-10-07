@@ -194,6 +194,14 @@ struct SettingsView: View {
                             UserDefaults.standard.set($0, forKey: "locus.life360Realism")
                         }
                     ))
+                    Toggle("Life360 Drive Detection Floor (≥ 18 mph)", isOn: Binding(
+                        get: { session.life360SpeedBoost },
+                        set: {
+                            session.life360SpeedBoost = $0
+                            UserDefaults.standard.set($0, forKey: "locus.life360SpeedBoost")
+                            session.updateRemainingRouteDuration()
+                        }
+                    ))
                     Toggle("Stationary Micro-Drift", isOn: Binding(
                         get: { session.stationaryDriftEnabled },
                         set: {
@@ -204,7 +212,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Movement & Spoof Realism")
                 } footer: {
-                    Text("High-frequency position streaming, smooth velocity acceleration, and subtle stationary micro-drift ensure tracking apps like Life360 accurately detect driving, transit, and walking speeds instead of reporting 0 mph.")
+                    Text("1.0 Hz continuous polyline traversal, Gauss-Markov kinematic drift, and the ≥18 mph Drive Detection Floor ensure tracking apps like Life360 accurately register real-time speed and active drives instead of showing 0 mph.")
                 }
 
                 Section {
