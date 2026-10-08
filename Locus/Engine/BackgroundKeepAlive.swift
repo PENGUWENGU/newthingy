@@ -8,7 +8,9 @@ final class BackgroundKeepAlive: NSObject, CLLocationManagerDelegate {
     override init() {
         super.init()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+        manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+        manager.distanceFilter = kCLDistanceFilterNone
+        manager.activityType = .automotiveNavigation
         manager.pausesLocationUpdatesAutomatically = false
         manager.allowsBackgroundLocationUpdates = true
         manager.showsBackgroundLocationIndicator = false

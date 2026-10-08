@@ -213,10 +213,39 @@ struct SettingsView: View {
                             UserDefaults.standard.set($0, forKey: "locus.stationaryDrift")
                         }
                     ))
+
+                    Toggle("Random Speed Fluctuations (Life360)", isOn: Binding(
+                        get: { session.speedRandomnessEnabled },
+                        set: { session.setSpeedRandomnessEnabled($0) }
+                    ))
+
+                    if session.speedRandomnessEnabled {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Speed Variance Range")
+                                Spacer()
+                                Text("±\(String(format: "%.0f", session.speedVarianceMPH)) mph")
+                                    .font(.subheadline.weight(.bold).monospacedDigit())
+                                    .foregroundStyle(session.primaryAccentColor)
+                            }
+                            Picker("Variance Range", selection: Binding(
+                                get: { session.speedVarianceMPH },
+                                set: { session.setSpeedVariance($0) }
+                            )) {
+                                Text("±1 mph").tag(1.0)
+                                Text("±2 mph").tag(2.0)
+                                Text("±3 mph").tag(3.0)
+                                Text("±4 mph").tag(4.0)
+                                Text("±5 mph").tag(5.0)
+                            }
+                            .pickerStyle(.segmented)
+                        }
+                        .padding(.vertical, 4)
+                    }
                 } header: {
                     Text("Movement & Spoof Realism")
                 } footer: {
-                    Text("1.0 Hz continuous polyline traversal, Gauss-Markov kinematic drift, and stationary micro-drift ensure tracking apps like Life360 accurately register real-time speed for every mode instead of showing 0 mph.")
+                    Text("Continuous 1.0 Hz Great Circle traversal, dynamic 1–5 mph throttle variance, corner slowdowns, and Gauss-Markov drift prevent constant-speed bot detection on Life360 & Find My so movement correctly tracks in vehicle.")
                 }
 
                 Section {

@@ -269,7 +269,7 @@ struct RoutePlannerSheet: View {
                             }
                             Spacer()
                             VStack(alignment: .trailing, spacing: 4) {
-                                Text(session.isFollowingRoute ? "Remaining ETA" : "Est. Duration (\(String(format: "%.1f", session.currentSpeedMPS)) m/s)")
+                                Text(session.isFollowingRoute ? "Remaining ETA" : "Est. Duration (\(session.speedUnit.format(session.currentSpeedMPS)))")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 Text(session.isFollowingRoute ? RouteBuilder.formattedETA(session.remainingRouteDuration) : RouteBuilder.formattedETA(estimatedDuration))

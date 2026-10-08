@@ -32,12 +32,12 @@ enum TravelMode: String, CaseIterable, Identifiable {
     /// Base meters per second before natural variation.
     var baseSpeed: CLLocationSpeed {
         switch self {
-        case .walk: return 1.4      // ~3.1 mph
-        case .sidewalk: return 1.25 // ~2.8 mph
-        case .run: return 3.1       // ~6.9 mph
-        case .cycle: return 5.5     // ~12.3 mph
-        case .bus: return 9.8       // ~21.9 mph
-        case .drive: return 13.4    // ~30.0 mph
+        case .walk: return 0.72      // ~1.6 mph (1–2 mph realistic walking)
+        case .sidewalk: return 0.54  // ~1.2 mph (relaxed stroll)
+        case .run: return 2.68       // ~6.0 mph
+        case .cycle: return 5.36     // ~12.0 mph
+        case .bus: return 9.83       // ~22.0 mph
+        case .drive: return 15.65    // ~35.0 mph (exceeds Life360 15mph threshold for driving detection)
         }
     }
 
@@ -110,6 +110,8 @@ enum SpeedPreference {
     static let valueKey = "locus.customSpeedMPS"
     static let enabledKey = "locus.customSpeedEnabled"
     static let unitKey = "locus.speedUnit"
+    static let varianceKey = "locus.speedVarianceMPH"
+    static let randomnessKey = "locus.speedRandomnessEnabled"
 
     static var preferredUnit: SpeedUnit {
         get {
@@ -137,6 +139,34 @@ enum SpeedPreference {
             UserDefaults.standard.set(true, forKey: enabledKey)
         } else {
             UserDefaults.standard.set(false, forKey: enabledKey)
+        }
+    }
+
+    /// Speed variance range (1.0 to 5.0 mph). Default 3.0 mph.
+    static var storedVariance: Double {
+        get {
+            let val = UserDefaults.standard.double(forKey: varianceKey)
+            if val >= 1.0 && val <= 5.0 {
+                return val
+            }
+            return 3.0 // default 3.0 mph fluctuation range
+        }
+        set {
+            let clamped = min(5.0, max(1.0, newValue))
+            UserDefaults.standard.set(clamped, forKey: varianceKey)
+        }
+    }
+
+    /// Whether realistic speed fluctuations are active. Default true.
+    static var storedRandomnessEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: randomnessKey) == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: randomnessKey)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: randomnessKey)
         }
     }
 }

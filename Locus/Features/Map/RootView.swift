@@ -333,74 +333,9 @@ struct SpeedChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .popover(isPresented: $showEditor) {
-            speedEditor
-                .presentationCompactAdaptation(.popover)
+        .sheet(isPresented: $showEditor) {
+            SpeedCustomizerSheet(session: session)
         }
-    }
-
-    private var speedEditor: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Movement Speed")
-                .font(.headline)
-
-            Picker("Unit", selection: $selectedUnit) {
-                ForEach(SpeedUnit.allCases) { u in
-                    Text(u.label).tag(u)
-                }
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: selectedUnit) { _, newUnit in
-                session.setSpeedUnit(newUnit)
-                let val = newUnit.fromMPS(session.currentSpeedMPS)
-                speedText = String(format: "%.1f", val)
-            }
-
-            Text("Enter speed in \(selectedUnit.label):")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            HStack {
-                TextField("e.g. 10.0", text: $speedText)
-                    .keyboardType(.decimalPad)
-                    .textFieldStyle(.roundedBorder)
-                Text(selectedUnit.label)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(LocusTheme.danger)
-            }
-
-            HStack {
-                Button("Reset Preset") {
-                    SoundManager.play(.toggle)
-                    session.clearCustomSpeed()
-                    errorMessage = nil
-                    showEditor = false
-                }
-                .buttonStyle(.bordered)
-
-                Spacer()
-
-                Button("Set Speed") {
-                    if session.setCustomSpeed(fromText: speedText, unit: selectedUnit) {
-                        SoundManager.play(.success)
-                        errorMessage = nil
-                        showEditor = false
-                    } else {
-                        SoundManager.play(.alert)
-                        errorMessage = "Enter a valid positive number (e.g. 10.0)."
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding(18)
-        .frame(width: 275)
     }
 }
 

@@ -92,6 +92,7 @@ targets:
         excludes:
           - "**/Info.plist"
       - path: Locus/Engine/RouteBuilder.swift
+      - path: Locus/Engine/RouteSimulationEngine.swift
       - path: Locus/Engine/TravelMode.swift
       - path: Locus/Support/SavedRoute.swift
     settings:

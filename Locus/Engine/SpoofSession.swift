@@ -123,6 +123,9 @@ final class SpoofSession: ObservableObject {
     @Published var smartTrafficLights: Bool = false
     @Published var routeNotificationsEnabled: Bool = true
     @Published var travelerName: String = UserDefaults.standard.string(forKey: "locus.travelerName") ?? ""
+    @Published var speedVarianceMPH: Double = SpeedPreference.storedVariance
+    @Published var speedRandomnessEnabled: Bool = SpeedPreference.storedRandomnessEnabled
+    @Published var liveCourseDegrees: Double = 0.0
 
     var primaryAccentColor: Color {
         accentTheme == .custom ? (Color(hex: customPrimaryHex) ?? accentTheme.primaryColor) : accentTheme.primaryColor
@@ -171,6 +174,7 @@ final class SpoofSession: ObservableObject {
     private var joystickVector: CGVector = .zero
     private let locationKeeper = BackgroundKeepAlive()
     private let audioKeeper = SilentAudioKeepAlive()
+    private let simulationEngine = RouteSimulationEngine()
     private var skipCurrentStopRequested = false
     private var smoothedVelocityMPS: Double = 0.0
     private var cumulativeDriftEast: Double = 0.0
@@ -408,6 +412,23 @@ final class SpoofSession: ObservableObject {
         objectWillChange.send()
     }
 
+    /// Sets speed variance fluctuation range (1.0 to 5.0 mph).
+    func setSpeedVariance(_ value: Double) {
+        let clamped = min(5.0, max(1.0, value))
+        speedVarianceMPH = clamped
+        SpeedPreference.storedVariance = clamped
+        simulationEngine.speedVarianceRangeMPH = clamped
+        objectWillChange.send()
+    }
+
+    /// Toggles dynamic random speed fluctuations.
+    func setSpeedRandomnessEnabled(_ value: Bool) {
+        speedRandomnessEnabled = value
+        SpeedPreference.storedRandomnessEnabled = value
+        simulationEngine.enableRandomSpeedFluctuations = value
+        objectWillChange.send()
+    }
+
     func dismissCompletionSummary() {
         SoundManager.play(.tap)
         withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
@@ -618,6 +639,10 @@ final class SpoofSession: ObservableObject {
         // Immediately begin with cruising velocity for realistic motion detection
         smoothedVelocityMPS = currentSpeedMPS
         liveSpeedMPS = currentSpeedMPS
+        simulationEngine.reset(initialSpeedMPS: currentSpeedMPS, initialHeading: 0.0)
+        simulationEngine.speedVarianceRangeMPH = speedVarianceMPH
+        simulationEngine.enableRandomSpeedFluctuations = speedRandomnessEnabled
+        simulationEngine.enableGPSJitter = life360RealismEnabled
 
         let totalRouteDistance = RouteBuilder.totalDistance(of: coordinates)
         activeRouteTotalDistance = totalRouteDistance
@@ -632,8 +657,7 @@ final class SpoofSession: ObservableObject {
         // Precompute segment distances and cumulative suffix distances
         var segmentDistances = [CLLocationDistance](repeating: 0, count: max(1, coordinates.count - 1))
         for i in 0..<(coordinates.count - 1) {
-            segmentDistances[i] = CLLocation(latitude: coordinates[i].latitude, longitude: coordinates[i].longitude)
-                .distance(from: CLLocation(latitude: coordinates[i + 1].latitude, longitude: coordinates[i + 1].longitude))
+            segmentDistances[i] = RouteSimulationEngine.haversineDistance(from: coordinates[i], to: coordinates[i + 1])
         }
 
         var suffixDistances = [CLLocationDistance](repeating: 0, count: coordinates.count)
@@ -699,36 +723,31 @@ final class SpoofSession: ObservableObject {
                     let actualElapsed = max(0.2, min(2.0, epochStart - lastEpochWallTime))
                     lastEpochWallTime = epochStart
 
-                    // 1. Kinematic Acceleration / Deceleration Ramping
-                    let targetSpeedMPS = self.currentSpeedMPS
-                    let accelRate: Double = (self.travelMode == .drive || self.travelMode == .bus) ? 3.5 : 1.8
-                    let maxSpeedDelta = accelRate * actualElapsed
-
-                    if self.smoothedVelocityMPS < targetSpeedMPS {
-                        self.smoothedVelocityMPS = min(targetSpeedMPS, self.smoothedVelocityMPS + maxSpeedDelta)
-                    } else if self.smoothedVelocityMPS > targetSpeedMPS {
-                        self.smoothedVelocityMPS = max(targetSpeedMPS, self.smoothedVelocityMPS - maxSpeedDelta)
+                    // 1. Dynamic Speed Profiling with Acceleration & Turn Deceleration Curves & 1–5 mph Variance
+                    let p0 = coordinates[currentSegmentIndex]
+                    let p1 = coordinates[currentSegmentIndex + 1]
+                    let segmentHeading = RouteSimulationEngine.greatCircleBearing(from: p0, to: p1)
+                    var turnAngle: Double = 0.0
+                    if currentSegmentIndex < coordinates.count - 2 {
+                        let p2 = coordinates[currentSegmentIndex + 2]
+                        let nextHeading = RouteSimulationEngine.greatCircleBearing(from: p1, to: p2)
+                        turnAngle = RouteSimulationEngine.turnAngleBetween(bearing1: segmentHeading, bearing2: nextHeading)
                     }
 
-                    // 2. Dynamic Velocity Vectors & Natural Cadence Variation
-                    let speedJitter: Double
-                    if self.travelMode == .walk || self.travelMode == .sidewalk {
-                        let stepCadence = sin(cumulativeDistanceTraveled * 3.1) * 0.02
-                        speedJitter = 1.0 + stepCadence + Double.random(in: -0.01...0.01)
-                    } else if self.travelMode == .run {
-                        speedJitter = 1.0 + sin(cumulativeDistanceTraveled * 2.6) * 0.015 + Double.random(in: -0.008...0.008)
-                    } else {
-                        speedJitter = 1.0 + Double.random(in: -0.01...0.01)
-                    }
+                    let liveSpeed = self.simulationEngine.computeNextSpeed(
+                        baseSpeedMPS: self.currentSpeedMPS,
+                        travelMode: self.travelMode,
+                        turnAngleDegrees: turnAngle,
+                        elapsedSeconds: actualElapsed
+                    )
 
-                    let liveSpeed = max(0.8, self.smoothedVelocityMPS * speedJitter)
                     var stepDistRemaining = liveSpeed * actualElapsed
                     let distanceTraveledThisStep = stepDistRemaining
                     cumulativeDistanceTraveled += distanceTraveledThisStep
                     distanceSinceLastLight += distanceTraveledThisStep
                     distanceSinceLastBusStop += distanceTraveledThisStep
 
-                    // 3. Advance across polyline segments according to true physical displacement
+                    // 2. Advance across polyline segments according to true geodesic displacement
                     var reachedEnd = false
                     while stepDistRemaining > 0 {
                         let segDist = segmentDistances[currentSegmentIndex]
@@ -751,31 +770,19 @@ final class SpoofSession: ObservableObject {
                         }
                     }
 
-                    let p0 = coordinates[currentSegmentIndex]
-                    let p1 = coordinates[currentSegmentIndex + 1]
+                    // 3. High-precision Great Circle Interpolation
                     let curSegDist = max(0.001, segmentDistances[currentSegmentIndex])
                     let t = min(1.0, max(0.0, distanceInCurrentSegment / curSegDist))
-                    var coord = CLLocationCoordinate2D(
-                        latitude: p0.latitude + (p1.latitude - p0.latitude) * t,
-                        longitude: p0.longitude + (p1.longitude - p0.longitude) * t
+                    let coord = RouteSimulationEngine.interpolateGreatCircle(from: p0, to: p1, fraction: t)
+
+                    // 4. Realistic Telemetry Payload & GPS Jitter Generation for Life360
+                    let telemetry = self.simulationEngine.generateTelemetryPayload(
+                        rawCoordinate: coord,
+                        headingDegrees: segmentHeading,
+                        speedMPS: liveSpeed,
+                        travelMode: self.travelMode
                     )
-                    let segmentHeading = Self.bearing(from: p0, to: p1)
-
-                    // For walking and sidewalk modes, apply subtle realistic lateral step sway (~0.10m)
-                    if (self.travelMode == .walk || self.travelMode == .sidewalk) && curSegDist > 2 {
-                        let swayMeters = sin(cumulativeDistanceTraveled * 2.4) * 0.10
-                        let earthRadius = 6378137.0
-                        let headingRad = segmentHeading * .pi / 180.0
-                        let latOffset = (swayMeters * cos(headingRad + .pi / 2)) / earthRadius * (180.0 / .pi)
-                        let lonOffset = (swayMeters * sin(headingRad + .pi / 2)) / (earthRadius * cos(coord.latitude * .pi / 180.0)) * (180.0 / .pi)
-                        coord.latitude += latOffset
-                        coord.longitude += lonOffset
-                    }
-
-                    // 4. Realistic GPS Signal Noise preserving forward motion vector for Life360
-                    let finalCoord = self.life360RealismEnabled
-                        ? self.applyGPSNoise(to: coord, headingDegrees: segmentHeading, speedMPS: liveSpeed)
-                        : coord
+                    let finalCoord = telemetry.coordinate
 
                     let remainingInCurSeg = max(0.0, segmentDistances[currentSegmentIndex] - distanceInCurrentSegment)
                     let remainingDistance = remainingInCurSeg + suffixDistances[currentSegmentIndex + 1]
@@ -786,9 +793,19 @@ final class SpoofSession: ObservableObject {
                     let completedSlice = Array(coordinates[0...currentSegmentIndex]) + [coord]
                     let remainingSlice = [coord] + Array(coordinates[(currentSegmentIndex + 1)...])
 
+                    // Physical injection directly on background simulation thread for sub-millisecond precision
+                    _ = LocationEngine.set(
+                        latitude: finalCoord.latitude,
+                        longitude: finalCoord.longitude,
+                        pairingPath: pairing.pairingPath,
+                        deviceIP: TunnelConfig.targetIP
+                    )
+
                     await MainActor.run {
-                        self.applySimulatedMovement(finalCoord, pairing: pairing)
-                        self.liveSpeedMPS = liveSpeed
+                        self.simulated = finalCoord
+                        self.pin = finalCoord
+                        self.liveSpeedMPS = telemetry.speedMPS
+                        self.liveCourseDegrees = telemetry.courseDegrees
                         self.routeProgress = min(1.0, max(0.0, 1.0 - (remainingDistance / max(1.0, totalRouteDistance))))
                         self.remainingRouteDistance = remainingDistance
                         self.remainingRouteDuration = remainingTravel + remainingStops
@@ -801,7 +818,7 @@ final class SpoofSession: ObservableObject {
                                 remainingDurationSeconds: self.remainingRouteDuration,
                                 destinationName: self.routeDestinationName,
                                 travelMode: self.travelMode,
-                                speedFormatted: self.speedUnit.format(liveSpeed),
+                                speedFormatted: self.speedUnit.format(telemetry.speedMPS),
                                 activeStopName: self.activeStopName,
                                 isPaused: self.isRoutePaused
                             )
@@ -1229,27 +1246,14 @@ final class SpoofSession: ObservableObject {
         headingDegrees: Double,
         speedMPS: Double
     ) -> CLLocationCoordinate2D {
-        // Continuous 1st-order Gauss-Markov drift + high-frequency jitter (0.5–1.5m total displacement)
-        persistentCrossTrackError = (persistentCrossTrackError * 0.82) + Double.random(in: -0.15...0.15)
-        persistentAlongTrackError = (persistentAlongTrackError * 0.82) + Double.random(in: -0.10...0.10)
-        persistentCrossTrackError = max(-0.85, min(0.85, persistentCrossTrackError))
-        persistentAlongTrackError = max(-0.55, min(0.55, persistentAlongTrackError))
-
-        // Subtle micro-jitter component (0.2–0.45m)
-        let microJitterAngle = Double.random(in: 0...(2 * .pi))
-        let microJitterMagnitude = Double.random(in: 0.20...0.45)
-        let microEast = microJitterMagnitude * cos(microJitterAngle)
-        let microNorth = microJitterMagnitude * sin(microJitterAngle)
-
-        let headingRad = headingDegrees * .pi / 180.0
-        let eastMeters = persistentAlongTrackError * sin(headingRad) + persistentCrossTrackError * cos(headingRad) + microEast
-        let northMeters = persistentAlongTrackError * cos(headingRad) - persistentCrossTrackError * sin(headingRad) + microNorth
-
-        let earthRadius = 6378137.0
-        let dLat = (northMeters / earthRadius) * (180.0 / .pi)
-        let dLon = (eastMeters / (earthRadius * cos(coordinate.latitude * .pi / 180.0))) * (180.0 / .pi)
-
-        return CLLocationCoordinate2D(latitude: coordinate.latitude + dLat, longitude: coordinate.longitude + dLon)
+        simulationEngine.enableGPSJitter = life360RealismEnabled
+        let payload = simulationEngine.generateTelemetryPayload(
+            rawCoordinate: coordinate,
+            headingDegrees: headingDegrees,
+            speedMPS: speedMPS,
+            travelMode: travelMode
+        )
+        return payload.coordinate
     }
 
     private static func coordinateLabel(_ coordinate: CLLocationCoordinate2D) -> String {
