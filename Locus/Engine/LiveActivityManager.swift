@@ -9,19 +9,25 @@ final class LiveActivityManager {
     static let shared = LiveActivityManager()
 
     #if canImport(ActivityKit)
-    private var currentActivity: Any? // Holds Activity<LocusRouteActivityAttributes>?
+    private var currentRouteActivity: Activity<LocusRouteActivityAttributes>?
+    private var currentSpoofActivity: Activity<LocusSpoofActivityAttributes>?
     #endif
+
+    private(set) var isRouteActive: Bool = false
+    private var spoofStartDate: Date = Date()
 
     private init() {}
 
     var isActivityActive: Bool {
         #if canImport(ActivityKit)
         if #available(iOS 16.1, *) {
-            return currentActivity != nil
+            return currentRouteActivity != nil || currentSpoofActivity != nil
         }
         #endif
         return false
     }
+
+    // MARK: - Route Simulation Live Activity
 
     func startActivity(
         routeId: String = UUID().uuidString,
@@ -36,9 +42,13 @@ final class LiveActivityManager {
         #if canImport(ActivityKit)
         guard #available(iOS 16.1, *) else { return }
 
-        // Synchronously detach previous activity reference so its async end never clears the new activity
-        let oldActivity = self.currentActivity as? Activity<LocusRouteActivityAttributes>
-        self.currentActivity = nil
+        isRouteActive = true
+
+        // Route activity takes full precedence: end any active spoof activity immediately
+        endSpoofActivity()
+
+        let oldActivity = self.currentRouteActivity
+        self.currentRouteActivity = nil
 
         let eta = Date().addingTimeInterval(initialRemainingSeconds)
         let formatter = DateFormatter()
@@ -87,9 +97,9 @@ final class LiveActivityManager {
                     content: .init(state: state, staleDate: Date().addingTimeInterval(3600)),
                     pushType: nil
                 )
-                self.currentActivity = activity
+                self.currentRouteActivity = activity
             } catch {
-                print("[LiveActivityManager] Failed to start ActivityKit Live Activity: \(error.localizedDescription)")
+                print("[LiveActivityManager] Failed to start Route Live Activity: \(error.localizedDescription)")
             }
         }
         #endif
@@ -107,11 +117,11 @@ final class LiveActivityManager {
     ) {
         #if canImport(ActivityKit)
         guard #available(iOS 16.1, *) else { return }
-        let resolvedActivity = (currentActivity as? Activity<LocusRouteActivityAttributes>)
+        let resolvedActivity = currentRouteActivity
             ?? Activity<LocusRouteActivityAttributes>.activities.first
         guard let activity = resolvedActivity else { return }
-        if currentActivity == nil {
-            currentActivity = activity
+        if currentRouteActivity == nil {
+            currentRouteActivity = activity
         }
 
         let eta = Date().addingTimeInterval(remainingDurationSeconds)
@@ -164,9 +174,10 @@ final class LiveActivityManager {
     func endActivity(destinationName: String = "Destination") {
         #if canImport(ActivityKit)
         guard #available(iOS 16.1, *) else { return }
-        let activityToEnd = (currentActivity as? Activity<LocusRouteActivityAttributes>)
+        isRouteActive = false
+        let activityToEnd = currentRouteActivity
             ?? Activity<LocusRouteActivityAttributes>.activities.first
-        self.currentActivity = nil
+        self.currentRouteActivity = nil
         guard let activity = activityToEnd else { return }
 
         let finalState = LocusRouteActivityAttributes.ContentState(
@@ -191,6 +202,141 @@ final class LiveActivityManager {
         }
         #endif
     }
+
+    // MARK: - Location Spoofing Live Activity (Stationary / Joystick)
+
+    func startSpoofActivity(
+        locationName: String,
+        coordinate: CLLocationCoordinate2D,
+        speedFormatted: String = "Stationary",
+        isJoystick: Bool = false
+    ) {
+        #if canImport(ActivityKit)
+        guard #available(iOS 16.1, *) else { return }
+        // If route simulation is currently active, DO NOT start or override with spoof activity
+        guard !isRouteActive else { return }
+
+        let coordStr = String(format: "%.4f°, %.4f°", coordinate.latitude, coordinate.longitude)
+        let accentHex = ThemePreference.accent.primaryColor.toHex()
+        let headline = isJoystick ? "Joystick Navigation" : "Location Spoofed"
+        spoofStartDate = Date()
+
+        let state = LocusSpoofActivityAttributes.ContentState(
+            locationTitle: locationName.isEmpty ? coordStr : locationName,
+            coordinateLabel: coordStr,
+            spoofStartedAt: spoofStartDate,
+            statusHeadline: headline,
+            speedFormatted: speedFormatted,
+            badgeColorHex: accentHex,
+            isJoystickMoving: isJoystick
+        )
+
+        // If spoof activity already exists, update it rather than creating duplicate
+        if let existing = currentSpoofActivity ?? Activity<LocusSpoofActivityAttributes>.activities.first {
+            currentSpoofActivity = existing
+            Task {
+                await existing.update(.init(state: state, staleDate: Date().addingTimeInterval(3600)))
+            }
+            return
+        }
+
+        let attributes = LocusSpoofActivityAttributes()
+
+        Task { @MainActor in
+            for stale in Activity<LocusSpoofActivityAttributes>.activities {
+                await stale.end(nil, dismissalPolicy: .immediate)
+            }
+            do {
+                let activity = try Activity<LocusSpoofActivityAttributes>.request(
+                    attributes: attributes,
+                    content: .init(state: state, staleDate: Date().addingTimeInterval(7200)),
+                    pushType: nil
+                )
+                self.currentSpoofActivity = activity
+            } catch {
+                print("[LiveActivityManager] Failed to start Spoof Live Activity: \(error.localizedDescription)")
+            }
+        }
+        #endif
+    }
+
+    func updateSpoofActivity(
+        locationName: String,
+        coordinate: CLLocationCoordinate2D,
+        speedFormatted: String,
+        isJoystick: Bool = true
+    ) {
+        #if canImport(ActivityKit)
+        guard #available(iOS 16.1, *) else { return }
+        guard !isRouteActive else { return }
+
+        guard let activity = currentSpoofActivity ?? Activity<LocusSpoofActivityAttributes>.activities.first else {
+            startSpoofActivity(locationName: locationName, coordinate: coordinate, speedFormatted: speedFormatted, isJoystick: isJoystick)
+            return
+        }
+        if currentSpoofActivity == nil {
+            currentSpoofActivity = activity
+        }
+
+        let coordStr = String(format: "%.4f°, %.4f°", coordinate.latitude, coordinate.longitude)
+        let accentHex = ThemePreference.accent.primaryColor.toHex()
+        let headline = isJoystick ? "Joystick Moving" : "Location Holding"
+
+        let state = LocusSpoofActivityAttributes.ContentState(
+            locationTitle: locationName.isEmpty ? coordStr : locationName,
+            coordinateLabel: coordStr,
+            spoofStartedAt: spoofStartDate,
+            statusHeadline: headline,
+            speedFormatted: speedFormatted,
+            badgeColorHex: accentHex,
+            isJoystickMoving: isJoystick
+        )
+
+        Task {
+            await activity.update(.init(state: state, staleDate: Date().addingTimeInterval(120)))
+        }
+        #endif
+    }
+
+    func endSpoofActivity() {
+        #if canImport(ActivityKit)
+        guard #available(iOS 16.1, *) else { return }
+        let activityToEnd = currentSpoofActivity ?? Activity<LocusSpoofActivityAttributes>.activities.first
+        self.currentSpoofActivity = nil
+        guard let activity = activityToEnd else { return }
+        Task {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+        #endif
+    }
+
+    func endAllActivities() {
+        #if canImport(ActivityKit)
+        guard #available(iOS 16.1, *) else { return }
+        isRouteActive = false
+        let rActivity = currentRouteActivity ?? Activity<LocusRouteActivityAttributes>.activities.first
+        currentRouteActivity = nil
+        let sActivity = currentSpoofActivity ?? Activity<LocusSpoofActivityAttributes>.activities.first
+        currentSpoofActivity = nil
+
+        Task {
+            if let rActivity {
+                await rActivity.end(nil, dismissalPolicy: .immediate)
+            }
+            if let sActivity {
+                await sActivity.end(nil, dismissalPolicy: .immediate)
+            }
+            for stale in Activity<LocusRouteActivityAttributes>.activities {
+                await stale.end(nil, dismissalPolicy: .immediate)
+            }
+            for stale in Activity<LocusSpoofActivityAttributes>.activities {
+                await stale.end(nil, dismissalPolicy: .immediate)
+            }
+        }
+        #endif
+    }
+
+    // MARK: - Formatting Helpers
 
     private func formatRemainingDuration(_ seconds: TimeInterval) -> String {
         let totalMinutes = Int(ceil(seconds / 60.0))

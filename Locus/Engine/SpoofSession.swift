@@ -122,6 +122,7 @@ final class SpoofSession: ObservableObject {
     @Published var busModeSmartStops: Bool = false
     @Published var smartTrafficLights: Bool = false
     @Published var routeNotificationsEnabled: Bool = true
+    @Published var travelerName: String = UserDefaults.standard.string(forKey: "locus.travelerName") ?? ""
 
     var primaryAccentColor: Color {
         accentTheme == .custom ? (Color(hex: customPrimaryHex) ?? accentTheme.primaryColor) : accentTheme.primaryColor
@@ -428,6 +429,7 @@ final class SpoofSession: ObservableObject {
         stopJoystick()
         stopResend()
         stopHealth()
+        LiveActivityManager.shared.endAllActivities()
         isBusy = true
         let result = LocationEngine.clear()
         isBusy = false
@@ -463,6 +465,14 @@ final class SpoofSession: ObservableObject {
         skipCurrentStopRequested = false
         if liveActivitiesEnabled {
             LiveActivityManager.shared.endActivity(destinationName: routeDestinationName)
+            if isSpoofing, let sim = simulated {
+                LiveActivityManager.shared.startSpoofActivity(
+                    locationName: Self.coordinateLabel(sim),
+                    coordinate: sim,
+                    speedFormatted: "Stationary",
+                    isJoystick: false
+                )
+            }
         }
     }
 
@@ -568,6 +578,14 @@ final class SpoofSession: ObservableObject {
         joystickTimer = nil
         if let pairing, !isFollowingRoute {
             startResend(pairing: pairing)
+        }
+        if liveActivitiesEnabled && !isFollowingRoute, let sim = simulated {
+            LiveActivityManager.shared.updateSpoofActivity(
+                locationName: Self.coordinateLabel(sim),
+                coordinate: sim,
+                speedFormatted: "Stationary",
+                isJoystick: false
+            )
         }
     }
 
@@ -855,11 +873,19 @@ final class SpoofSession: ObservableObject {
                 self.isBusStopActive = false
                 self.startResend(pairing: pairing)
 
+                let totalDuration = Date().timeIntervalSince(routeStartTime)
                 if self.liveActivitiesEnabled {
                     LiveActivityManager.shared.endActivity(destinationName: self.routeDestinationName)
+                    if let endCoord = coordinates.last {
+                        LiveActivityManager.shared.startSpoofActivity(
+                            locationName: self.routeDestinationName.isEmpty ? Self.coordinateLabel(endCoord) : self.routeDestinationName,
+                            coordinate: endCoord,
+                            speedFormatted: "Stationary",
+                            isJoystick: false
+                        )
+                    }
                 }
 
-                let totalDuration = Date().timeIntervalSince(routeStartTime)
                 self.routeCompletionSummary = RouteCompletionStats(
                     destinationName: self.routeDestinationName.isEmpty ? "Destination" : self.routeDestinationName,
                     totalDistanceMeters: totalRouteDistance,
@@ -869,7 +895,11 @@ final class SpoofSession: ObservableObject {
 
                 // Completion triggers: rumble haptics, notification, sound, and screen flash!
                 self.triggerCompletionRumble()
-                self.notifyRouteFinished(destination: self.routeDestinationName)
+                self.notifyRouteFinished(
+                    destination: self.routeDestinationName,
+                    distanceMeters: totalRouteDistance,
+                    durationSeconds: max(1, totalDuration)
+                )
                 withAnimation(.easeIn(duration: 0.15)) {
                     self.routeFinishedFlash = true
                 }
@@ -1044,15 +1074,54 @@ final class SpoofSession: ObservableObject {
         }
     }
 
-    func notifyRouteFinished(destination: String) {
+    func setTravelerName(_ name: String) {
+        travelerName = name
+        UserDefaults.standard.set(name, forKey: "locus.travelerName")
+    }
+
+    func testArrivalNotification() {
+        let dest = routeDestinationName.isEmpty ? "Home" : routeDestinationName
+        notifyRouteFinished(destination: dest, distanceMeters: 4500, durationSeconds: 680)
+    }
+
+    func notifyRouteFinished(destination: String, distanceMeters: Double = 0, durationSeconds: TimeInterval = 0) {
         guard routeNotificationsEnabled else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             guard granted else { return }
             let content = UNMutableNotificationContent()
-            content.title = "Route Completed"
-            content.body = destination.isEmpty ? "Your simulated route has reached the final destination." : "Arrived at \(destination)."
+            let cleanDest = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+            let finalDest = cleanDest.isEmpty ? "Destination" : cleanDest
+            let trimmedName = self.travelerName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if !trimmedName.isEmpty {
+                content.title = "📍 \(trimmedName) arrived at \(finalDest)!"
+            } else {
+                content.title = "📍 Arrived at \(finalDest)!"
+            }
+
+            var parts: [String] = []
+            if distanceMeters > 0 {
+                parts.append(RouteBuilder.formattedDistance(distanceMeters))
+            }
+            if durationSeconds > 0 {
+                let mins = Int(ceil(durationSeconds / 60.0))
+                parts.append("\(mins) min")
+            }
+            parts.append(self.travelMode.title)
+            content.subtitle = parts.joined(separator: " • ")
+
+            if !trimmedName.isEmpty {
+                content.body = "\(trimmedName) safely reached \(finalDest). Telemetry is now holding steady at \(finalDest) for Life360 & Find My."
+            } else {
+                content.body = "You have reached \(finalDest). Telemetry is now holding steady at \(finalDest) for Life360 & Find My."
+            }
+
             content.sound = .default
-            content.userInfo = ["url": "locus://route_completed", "destination": destination]
+            content.userInfo = [
+                "url": "locus://route_completed",
+                "destination": finalDest,
+                "travelerName": trimmedName
+            ]
             let request = UNNotificationRequest(identifier: "locus.route.finish.\(UUID().uuidString)", content: content, trigger: nil)
             UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
         }
@@ -1153,21 +1222,28 @@ final class SpoofSession: ObservableObject {
     }
 
     /// Injects realistic GPS measurement noise (multipath + atmospheric dilution of precision)
-    /// with continuous Gauss-Markov drift that preserves true kinematic velocity and heading for Life360.
+    /// with continuous Gauss-Markov drift that preserves true kinematic velocity and heading for Life360,
+    /// injecting subtle random GPS jitter within 0.5–1.5 meters.
     func applyGPSNoise(
         to coordinate: CLLocationCoordinate2D,
         headingDegrees: Double,
         speedMPS: Double
     ) -> CLLocationCoordinate2D {
-        // Continuous 1st-order Gauss-Markov drift (tau ~ 8s): avoids erratic jumps, preserves velocity vector
-        persistentCrossTrackError = (persistentCrossTrackError * 0.85) + Double.random(in: -0.04...0.04)
-        persistentAlongTrackError = (persistentAlongTrackError * 0.85) + Double.random(in: -0.02...0.02)
-        persistentCrossTrackError = max(-0.20, min(0.20, persistentCrossTrackError))
-        persistentAlongTrackError = max(-0.10, min(0.10, persistentAlongTrackError))
+        // Continuous 1st-order Gauss-Markov drift + high-frequency jitter (0.5–1.5m total displacement)
+        persistentCrossTrackError = (persistentCrossTrackError * 0.82) + Double.random(in: -0.15...0.15)
+        persistentAlongTrackError = (persistentAlongTrackError * 0.82) + Double.random(in: -0.10...0.10)
+        persistentCrossTrackError = max(-0.85, min(0.85, persistentCrossTrackError))
+        persistentAlongTrackError = max(-0.55, min(0.55, persistentAlongTrackError))
+
+        // Subtle micro-jitter component (0.2–0.45m)
+        let microJitterAngle = Double.random(in: 0...(2 * .pi))
+        let microJitterMagnitude = Double.random(in: 0.20...0.45)
+        let microEast = microJitterMagnitude * cos(microJitterAngle)
+        let microNorth = microJitterMagnitude * sin(microJitterAngle)
 
         let headingRad = headingDegrees * .pi / 180.0
-        let eastMeters = persistentAlongTrackError * sin(headingRad) + persistentCrossTrackError * cos(headingRad)
-        let northMeters = persistentAlongTrackError * cos(headingRad) - persistentCrossTrackError * sin(headingRad)
+        let eastMeters = persistentAlongTrackError * sin(headingRad) + persistentCrossTrackError * cos(headingRad) + microEast
+        let northMeters = persistentAlongTrackError * cos(headingRad) - persistentCrossTrackError * sin(headingRad) + microNorth
 
         let earthRadius = 6378137.0
         let dLat = (northMeters / earthRadius) * (180.0 / .pi)
@@ -1245,6 +1321,14 @@ final class SpoofSession: ObservableObject {
             if markRecent {
                 pushRecent(coordinate)
             }
+            if liveActivitiesEnabled && !isFollowingRoute {
+                LiveActivityManager.shared.startSpoofActivity(
+                    locationName: Self.coordinateLabel(coordinate),
+                    coordinate: coordinate,
+                    speedFormatted: "Stationary",
+                    isJoystick: false
+                )
+            }
         case .failure(let error):
             lastError = error.localizedDescription
             if simulated != nil {
@@ -1282,6 +1366,14 @@ final class SpoofSession: ObservableObject {
             : nextRaw
 
         applySimulatedMovement(nextNoisy, pairing: pairing)
+        if liveActivitiesEnabled && !isFollowingRoute {
+            LiveActivityManager.shared.updateSpoofActivity(
+                locationName: "Joystick Navigation",
+                coordinate: nextNoisy,
+                speedFormatted: speedUnit.format(liveSpeed),
+                isJoystick: true
+            )
+        }
     }
 
     private func startResend(pairing: PairingStore) {

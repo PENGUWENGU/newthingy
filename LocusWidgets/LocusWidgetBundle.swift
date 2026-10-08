@@ -6,5 +6,6 @@ import SwiftUI
 struct LocusWidgetBundle: WidgetBundle {
     var body: some Widget {
         LocusRouteLiveActivityWidget()
+        LocusSpoofLiveActivityWidget()
     }
 }

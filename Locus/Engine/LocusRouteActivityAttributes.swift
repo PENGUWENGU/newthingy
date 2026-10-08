@@ -66,6 +66,43 @@ struct LocusRouteActivityAttributes: ActivityAttributes {
         self.targetDestinationName = targetDestinationName
     }
 }
+
+@available(iOS 16.1, *)
+struct LocusSpoofActivityAttributes: ActivityAttributes {
+    struct ContentState: Codable, Hashable {
+        var locationTitle: String
+        var coordinateLabel: String
+        var spoofStartedAt: Date
+        var statusHeadline: String
+        var speedFormatted: String
+        var badgeColorHex: String
+        var isJoystickMoving: Bool
+
+        init(
+            locationTitle: String,
+            coordinateLabel: String,
+            spoofStartedAt: Date = Date(),
+            statusHeadline: String = "Location Spoofed",
+            speedFormatted: String = "Stationary",
+            badgeColorHex: String = "#30D158",
+            isJoystickMoving: Bool = false
+        ) {
+            self.locationTitle = locationTitle
+            self.coordinateLabel = coordinateLabel
+            self.spoofStartedAt = spoofStartedAt
+            self.statusHeadline = statusHeadline
+            self.speedFormatted = speedFormatted
+            self.badgeColorHex = badgeColorHex
+            self.isJoystickMoving = isJoystickMoving
+        }
+    }
+
+    var sessionId: String
+
+    init(sessionId: String = UUID().uuidString) {
+        self.sessionId = sessionId
+    }
+}
 #endif
 
 extension Notification.Name {

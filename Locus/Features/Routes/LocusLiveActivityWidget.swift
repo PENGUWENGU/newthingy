@@ -268,4 +268,161 @@ struct LocusRouteLiveActivityWidget: Widget {
         }
     }
 }
+
+@available(iOS 16.1, *)
+struct LocusSpoofLiveActivityWidgetView: View {
+    let context: ActivityViewContext<LocusSpoofActivityAttributes>
+
+    var body: some View {
+        let state = context.state
+        let tint = parseLiveActivityColor(hex: state.badgeColorHex, fallback: Color(red: 0.19, green: 0.82, blue: 0.35))
+
+        VStack(spacing: 12) {
+            // Header bar
+            HStack(alignment: .center) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(tint)
+                        .frame(width: 8, height: 8)
+                    Text("LOCUS • SPOOF ACTIVE")
+                        .font(.system(size: 11, weight: .black, design: .rounded))
+                        .foregroundStyle(tint)
+                        .tracking(1.0)
+                }
+
+                Spacer()
+
+                HStack(spacing: 5) {
+                    Image(systemName: "timer")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                    Text(state.spoofStartedAt, style: .timer)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.white.opacity(0.12), in: Capsule())
+            }
+
+            // Location details & telemetry pill
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(tint.opacity(0.18))
+                        .frame(width: 40, height: 40)
+                    Image(systemName: state.isJoystickMoving ? "gamecontroller.fill" : "mappin.and.ellipse")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(tint)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(state.locationTitle)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text(state.coordinateLabel)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.65))
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(state.speedFormatted)
+                        .font(.system(size: 13, weight: .heavy, design: .monospaced))
+                        .foregroundStyle(tint)
+                    Text(state.isJoystickMoving ? "Moving" : "Holding")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+            }
+
+            // Bottom banner
+            HStack {
+                HStack(spacing: 5) {
+                    Image(systemName: "shield.lefthalf.filled")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(tint)
+                    Text("Continuous GPS telemetry active for Life360 & Find My")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color(red: 0.10, green: 0.09, blue: 0.08).opacity(0.96))
+        )
+    }
+}
+
+@available(iOS 16.1, *)
+struct LocusSpoofLiveActivityWidget: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: LocusSpoofActivityAttributes.self) { context in
+            LocusSpoofLiveActivityWidgetView(context: context)
+                .activityBackgroundTint(Color(red: 0.10, green: 0.09, blue: 0.08))
+                .activitySystemActionForegroundColor(.white)
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    HStack(spacing: 6) {
+                        Image(systemName: context.state.isJoystickMoving ? "gamecontroller.fill" : "location.north.circle.fill")
+                            .foregroundStyle(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: Color(red: 0.19, green: 0.82, blue: 0.35)))
+                        Text(context.state.statusHeadline)
+                            .font(.subheadline.weight(.heavy))
+                            .lineLimit(1)
+                    }
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    Text(context.state.speedFormatted)
+                        .font(.caption.monospacedDigit().weight(.bold))
+                        .foregroundStyle(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: Color(red: 0.19, green: 0.82, blue: 0.35)))
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(context.state.locationTitle)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                            Text(context.state.coordinateLabel)
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: Color(red: 0.19, green: 0.82, blue: 0.35)))
+                                .frame(width: 8, height: 8)
+                            Text(context.state.spoofStartedAt, style: .timer)
+                                .font(.caption.monospacedDigit().weight(.bold))
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.12), in: Capsule())
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.top, 2)
+                }
+            } compactLeading: {
+                Image(systemName: context.state.isJoystickMoving ? "gamecontroller.fill" : "location.fill")
+                    .foregroundStyle(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: Color(red: 0.19, green: 0.82, blue: 0.35)))
+            } compactTrailing: {
+                Text(context.state.spoofStartedAt, style: .timer)
+                    .font(.caption2.monospacedDigit().weight(.bold))
+                    .foregroundStyle(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: Color(red: 0.19, green: 0.82, blue: 0.35)))
+                    .frame(width: 44, alignment: .trailing)
+            } minimal: {
+                Image(systemName: context.state.isJoystickMoving ? "gamecontroller.fill" : "location.fill")
+                    .foregroundStyle(parseLiveActivityColor(hex: context.state.badgeColorHex, fallback: Color(red: 0.19, green: 0.82, blue: 0.35)))
+            }
+        }
+    }
+}
 #endif

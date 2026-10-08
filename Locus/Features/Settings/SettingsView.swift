@@ -156,10 +156,31 @@ struct SettingsView: View {
                         }
                     ))
                     Toggle("Route Completion Notification", isOn: $session.routeNotificationsEnabled)
+
+                    HStack {
+                        Label("Traveler / Device Name", systemImage: "person.crop.circle")
+                        Spacer()
+                        TextField("e.g. Alex or Eddie", text: Binding(
+                            get: { session.travelerName },
+                            set: { session.setTravelerName($0) }
+                        ))
+                        .multilineTextAlignment(.trailing)
+                        .foregroundStyle(.primary)
+                    }
+
+                    Button {
+                        session.testArrivalNotification()
+                    } label: {
+                        HStack {
+                            Label("Send Test Arrival Notification", systemImage: "paperplane.fill")
+                                .foregroundStyle(session.primaryAccentColor)
+                            Spacer()
+                        }
+                    }
                 } header: {
                     Text("Live Activities & Alerts")
                 } footer: {
-                    Text("Show live departure countdown ('Go in 54 minutes'), progress bar, and arrival ETA on your Lock Screen and Dynamic Island during routes.")
+                    Text("Show live departure countdown, progress, and speed on your Lock Screen and Dynamic Island for active routes and stationary spoofing. Enter your traveler name to personalize arrival notifications (e.g. 'Alex arrived at Home!').")
                 }
 
                 Section {
