@@ -58,6 +58,7 @@ public final class RouteSimulationEngine {
     private var persistentCrossTrackError: Double = 0.0
     private var speedRandomWalkOffsetMPH: Double = 0.0
     private var stepCadencePhase: Double = 0.0
+    private var throttlePhase: Double = Double.random(in: 0...100)
     private var currentFilteredSpeedMPS: Double = 0.0
     private var lastValidHeading: Double = 0.0
 
@@ -76,6 +77,7 @@ public final class RouteSimulationEngine {
         persistentCrossTrackError = 0.0
         speedRandomWalkOffsetMPH = 0.0
         stepCadencePhase = 0.0
+        throttlePhase = Double.random(in: 0...100)
         currentFilteredSpeedMPS = initialSpeedMPS
         lastValidHeading = initialHeading
     }
@@ -176,15 +178,29 @@ public final class RouteSimulationEngine {
             }
         }
 
-        // 2. Realistic Random Speed Fluctuation within 1–5 mph range
+        // 2. Realistic Dynamic Random Speed Fluctuation within 1–5 mph range
         if enableRandomSpeedFluctuations {
             let maxVarianceMPH = min(5.0, max(1.0, speedVarianceRangeMPH))
-            // Continuous Ornstein-Uhlenbeck random walk with mean-reversion
-            let step = Double.random(in: -0.55...0.55) - (speedRandomWalkOffsetMPH * 0.18)
-            speedRandomWalkOffsetMPH = min(maxVarianceMPH, max(-maxVarianceMPH, speedRandomWalkOffsetMPH + step))
+            // Dynamic driver throttle wave with organic Brownian perturbation
+            throttlePhase += dt * 0.45
+            let primaryWave = sin(throttlePhase) * 0.70
+            let harmonicWave = sin(throttlePhase * 2.3) * 0.22
+            let microJitter = Double.random(in: -0.12...0.12)
+            let dynamicOffset = (primaryWave + harmonicWave + microJitter) * maxVarianceMPH
+            speedRandomWalkOffsetMPH = min(maxVarianceMPH, max(-maxVarianceMPH, dynamicOffset))
 
-            // Apply variance in m/s (1 mph = 0.44704 m/s)
-            let varianceMPS = speedRandomWalkOffsetMPH * 0.44704
+            // Scale variance realistically for walking (max 0.35 mph) vs vehicles (full 1–5 mph)
+            let effectiveVarianceMPH: Double
+            switch travelMode {
+            case .walk, .sidewalk:
+                effectiveVarianceMPH = min(0.35, max(-0.35, speedRandomWalkOffsetMPH * 0.15))
+            case .run:
+                effectiveVarianceMPH = min(0.9, max(-0.9, speedRandomWalkOffsetMPH * 0.30))
+            case .cycle, .bus, .drive:
+                effectiveVarianceMPH = speedRandomWalkOffsetMPH
+            }
+
+            let varianceMPS = effectiveVarianceMPH * 0.44704
             targetMPS = max(0.5, targetMPS + varianceMPS)
         }
 
@@ -207,8 +223,8 @@ public final class RouteSimulationEngine {
             maxAcceleration = 1.8
             maxDeceleration = 3.2
         case .drive:
-            maxAcceleration = 3.0 // realistic automotive 0-60 in ~8-9s
-            maxDeceleration = 4.2
+            maxAcceleration = 3.5 // realistic automotive throttle response
+            maxDeceleration = 4.5
         }
 
         if currentFilteredSpeedMPS < targetMPS {
@@ -256,22 +272,20 @@ public final class RouteSimulationEngine {
 
         // 1st-order Gauss-Markov atmospheric/multipath correlation
         persistentCrossTrackError = (persistentCrossTrackError * 0.80) + Double.random(in: -0.12...0.12)
-        persistentAlongTrackError = (persistentAlongTrackError * 0.80) + Double.random(in: -0.09...0.09)
-        persistentCrossTrackError = max(-0.80, min(0.80, persistentCrossTrackError))
-        persistentAlongTrackError = max(-0.50, min(0.50, persistentAlongTrackError))
+        persistentAlongTrackError = (persistentAlongTrackError * 0.80) + Double.random(in: -0.06...0.06)
+        let totalAlong = max(-0.20, min(0.20, persistentAlongTrackError))
+        let totalCross = max(-0.60, min(0.60, persistentCrossTrackError))
 
-        // High frequency micro-jitter (0.2–0.45m)
-        let microAngle = Double.random(in: 0...(2 * .pi))
-        let microMag = Double.random(in: 0.20...0.45)
-        let microEast = microMag * cos(microAngle)
-        let microNorth = microMag * sin(microAngle)
+        // High frequency micro-jitter (predominantly lateral cross-track so forward speed is never cancelled)
+        let microCross = Double.random(in: -0.30...0.30)
+        let microAlong = Double.random(in: -0.10...0.10)
 
         let headingRad = headingDegrees * .pi / 180.0
-        let totalAlong = persistentAlongTrackError
-        let totalCross = persistentCrossTrackError
+        let alongMeters = totalAlong + microAlong
+        let crossMeters = totalCross + microCross
 
-        let eastMeters = (totalAlong * sin(headingRad)) + (totalCross * cos(headingRad)) + microEast
-        let northMeters = (totalAlong * cos(headingRad)) - (totalCross * sin(headingRad)) + microNorth
+        let eastMeters = (alongMeters * sin(headingRad)) + (crossMeters * cos(headingRad))
+        let northMeters = (alongMeters * cos(headingRad)) - (crossMeters * sin(headingRad))
 
         let dLat = (northMeters / Self.earthRadiusMeters) * (180.0 / .pi)
         let dLon = (eastMeters / (Self.earthRadiusMeters * cos(rawCoordinate.latitude * .pi / 180.0))) * (180.0 / .pi)

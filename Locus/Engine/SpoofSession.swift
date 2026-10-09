@@ -181,6 +181,7 @@ final class SpoofSession: ObservableObject {
     private var cumulativeDriftNorth: Double = 0.0
     private var persistentCrossTrackError: Double = 0.0
     private var persistentAlongTrackError: Double = 0.0
+    private var lastJoystickWallTime: Double = 0.0
 
     private let favoritesKey = "locus.favorites"
     private let recentsKey = "locus.recents"
@@ -577,6 +578,7 @@ final class SpoofSession: ObservableObject {
         locationKeeper.start()
         beginBackground()
         joystickActive = true
+        lastJoystickWallTime = CACurrentMediaTime()
         joystickTimer?.invalidate()
         let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -608,6 +610,46 @@ final class SpoofSession: ObservableObject {
                 isJoystick: false
             )
         }
+    }
+
+    /// Generates and drives an authentic continuous driving circuit (~2.5 km loop, exceeding Life360's
+    /// 0.5-mile drive detection threshold) with dynamic 1–5 mph throttle variance, corner slowdowns,
+    /// and continuous 1.0s GPS injection for Life360.
+    func startDriveSimulation(around center: CLLocationCoordinate2D? = nil, pairing: PairingStore) {
+        guard pairing.hasPairingFile else { return }
+        let origin = center ?? simulated ?? pin ?? locationKeeper.lastKnownCoordinate ?? CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194)
+        setTravelMode(.drive)
+        if customSpeedMPS == nil {
+            setCustomSpeed(TravelMode.drive.baseSpeed)
+        }
+
+        // Generate smooth 12-point road circuit (~2.4 km perimeter)
+        let radiusMeters: Double = 380.0
+        var loopCoords: [CLLocationCoordinate2D] = []
+        let pointCount = 12
+        for i in 0..<pointCount {
+            let angle = (Double(i) / Double(pointCount)) * (2.0 * .pi)
+            let r = radiusMeters * (1.0 + 0.16 * sin(angle * 2.0))
+            let east = r * cos(angle)
+            let north = r * sin(angle)
+            loopCoords.append(offset(coordinate: origin, eastMeters: east, northMeters: north))
+        }
+        loopCoords.append(loopCoords[0])
+
+        let sampled = RouteBuilder.sample(coordinates: loopCoords, every: 12.0)
+        let waypoints = [
+            RouteWaypoint(coordinate: sampled[0], title: "Start Loop"),
+            RouteWaypoint(coordinate: sampled[sampled.count / 2], title: "Midpoint"),
+            RouteWaypoint(coordinate: sampled[0], title: "End Loop")
+        ]
+
+        followRoute(
+            sampled,
+            waypoints: waypoints,
+            destinationName: "Life360 Driving Simulation",
+            pairing: pairing,
+            loop: true
+        )
     }
 
     func followRoute(
@@ -1355,12 +1397,25 @@ final class SpoofSession: ObservableObject {
         let nx = joystickVector.dx / magnitude
         let ny = -joystickVector.dy / magnitude
 
-        // Kinematic joystick velocity
+        let now = CACurrentMediaTime()
+        let dt = lastJoystickWallTime > 0 ? max(0.2, min(2.5, now - lastJoystickWallTime)) : 1.0
+        lastJoystickWallTime = now
+
+        // Kinematic joystick velocity with speed variance range (1–5 mph)
         let targetSpeed = currentSpeedMPS * min(1.0, magnitude)
-        smoothedVelocityMPS = smoothedVelocityMPS * 0.40 + targetSpeed * 0.60
-        let liveSpeed = max(0.8, smoothedVelocityMPS * Double.random(in: 0.98...1.02))
+        let liveSpeed: Double
+        if speedRandomnessEnabled {
+            liveSpeed = simulationEngine.computeNextSpeed(
+                baseSpeedMPS: targetSpeed,
+                travelMode: travelMode,
+                turnAngleDegrees: 0,
+                elapsedSeconds: dt
+            )
+        } else {
+            smoothedVelocityMPS = smoothedVelocityMPS * 0.40 + targetSpeed * 0.60
+            liveSpeed = max(0.8, smoothedVelocityMPS)
+        }
         liveSpeedMPS = liveSpeed
-        let dt: Double = 1.0
         let meters = liveSpeed * dt
 
         let headingDeg = (atan2(nx, ny) * 180.0 / .pi + 360.0).truncatingRemainder(dividingBy: 360.0)

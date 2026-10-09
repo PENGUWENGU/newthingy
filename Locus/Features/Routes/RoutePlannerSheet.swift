@@ -256,6 +256,44 @@ struct RoutePlannerSheet: View {
                     }
                 }
 
+                // MARK: - Instant Life360 Drive Simulation Loop
+                if activePath.count < 2 && !session.isFollowingRoute {
+                    Section("Life360 Movement Simulation") {
+                        Button {
+                            SoundManager.play(.success)
+                            session.startDriveSimulation(pairing: pairing)
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    Circle()
+                                        .fill(session.primaryAccentColor.opacity(0.18))
+                                        .frame(width: 44, height: 44)
+                                    Image(systemName: "car.side.fill")
+                                        .font(.system(size: 20, weight: .bold))
+                                        .foregroundStyle(session.primaryAccentColor)
+                                }
+
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("Simulate Driving Loop (Life360)")
+                                        .font(.subheadline.weight(.bold))
+                                        .foregroundStyle(.primary)
+                                    Text("Auto-creates 2.4 km circuit (>0.5 mi) at 35 mph with active 1–5 mph throttle variance to trigger Life360 driving detection.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Image(systemName: "play.circle.fill")
+                                    .font(.title2)
+                                    .foregroundStyle(session.primaryAccentColor)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+
                 // MARK: - Route Overview & Follow / Save
                 if activePath.count >= 2 {
                     Section("Route Overview") {
@@ -283,6 +321,58 @@ struct RoutePlannerSheet: View {
                             Label("Repeat route continuously (Loop)", systemImage: "repeat")
                                 .font(.subheadline)
                         }
+
+                        // MARK: - Speed & Randomness Control (Life360)
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Label("Speed & Variance", systemImage: "gauge.with.needle.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text(session.speedUnit.format(session.currentSpeedMPS))
+                                    .font(.subheadline.weight(.bold).monospacedDigit())
+                                    .foregroundStyle(session.primaryAccentColor)
+                            }
+
+                            Toggle("Random Speed Fluctuations (Life360)", isOn: Binding(
+                                get: { session.speedRandomnessEnabled },
+                                set: { session.setSpeedRandomnessEnabled($0) }
+                            ))
+                            .font(.subheadline)
+
+                            if session.speedRandomnessEnabled {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text("Variance Range:")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        Text("±\(Int(session.speedVarianceMPH)) mph")
+                                            .font(.caption.weight(.bold).monospacedDigit())
+                                            .foregroundStyle(session.primaryAccentColor)
+                                    }
+
+                                    HStack(spacing: 6) {
+                                        ForEach([1.0, 2.0, 3.0, 4.0, 5.0], id: \.self) { val in
+                                            let isSelected = abs(session.speedVarianceMPH - val) < 0.1
+                                            Button {
+                                                SoundManager.play(.toggle)
+                                                session.setSpeedVariance(val)
+                                            } label: {
+                                                Text("±\(Int(val))")
+                                                    .font(.caption2.weight(isSelected ? .bold : .medium))
+                                                    .frame(maxWidth: .infinity)
+                                                    .padding(.vertical, 6)
+                                                    .background(isSelected ? session.primaryAccentColor : Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                                                    .foregroundStyle(isSelected ? .black : .primary)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                }
+                                .padding(.top, 2)
+                            }
+                        }
+                        .padding(.vertical, 4)
 
                         // Save Route Button
                         HStack(spacing: 10) {

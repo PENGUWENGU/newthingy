@@ -317,9 +317,11 @@ struct SpeedChip: View {
             errorMessage = nil
             showEditor = true
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "speedometer")
-                Text(session.speedUnit.format(session.currentSpeedMPS))
+            HStack(spacing: 5) {
+                Image(systemName: session.speedRandomnessEnabled ? "waveform" : "speedometer")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(session.speedRandomnessEnabled ? session.primaryAccentColor : .primary)
+                Text(session.speedRandomnessEnabled ? "\(session.speedUnit.format(session.currentSpeedMPS)) ±\(Int(session.speedVarianceMPH))" : session.speedUnit.format(session.currentSpeedMPS))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
