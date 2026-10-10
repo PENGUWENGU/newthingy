@@ -2,12 +2,12 @@ import CoreLocation
 import MapKit
 import Foundation
 
-enum TravelMode: String, CaseIterable, Identifiable {
+public enum TravelMode: String, CaseIterable, Identifiable {
     case walk, sidewalk, run, cycle, bus, drive
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 
-    var title: String {
+    public var title: String {
         switch self {
         case .walk: return "Walk"
         case .sidewalk: return "Sidewalk"
@@ -18,7 +18,7 @@ enum TravelMode: String, CaseIterable, Identifiable {
         }
     }
 
-    var icon: String {
+    public var icon: String {
         switch self {
         case .walk: return "figure.walk"
         case .sidewalk: return "figure.walk.motion"
@@ -30,7 +30,7 @@ enum TravelMode: String, CaseIterable, Identifiable {
     }
 
     /// Base meters per second before natural variation.
-    var baseSpeed: CLLocationSpeed {
+    public var baseSpeed: CLLocationSpeed {
         switch self {
         case .walk: return 0.72      // ~1.6 mph (1–2 mph realistic walking)
         case .sidewalk: return 0.54  // ~1.2 mph (relaxed stroll)
@@ -41,11 +41,11 @@ enum TravelMode: String, CaseIterable, Identifiable {
         }
     }
 
-    var defaultSpeedMPS: CLLocationSpeed {
+    public var defaultSpeedMPS: CLLocationSpeed {
         baseSpeed
     }
 
-    var mkTransportType: MKDirectionsTransportType {
+    public var mkTransportType: MKDirectionsTransportType {
         switch self {
         case .walk, .sidewalk, .run: return .walking
         case .cycle, .bus, .drive: return .automobile
@@ -54,17 +54,17 @@ enum TravelMode: String, CaseIterable, Identifiable {
 }
 
 /// Preferred speed display & input units (mph, km/h, m/s).
-enum SpeedUnit: String, CaseIterable, Identifiable {
+public enum SpeedUnit: String, CaseIterable, Identifiable {
     case mph = "mph"
     case kmh = "km/h"
     case mps = "m/s"
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 
-    var label: String { rawValue }
+    public var label: String { rawValue }
 
     /// Converts a value in this unit to meters per second.
-    func toMPS(_ value: Double) -> Double {
+    public func toMPS(_ value: Double) -> Double {
         switch self {
         case .mph: return value / 2.236936
         case .kmh: return value / 3.6
@@ -73,7 +73,7 @@ enum SpeedUnit: String, CaseIterable, Identifiable {
     }
 
     /// Converts meters per second into this unit.
-    func fromMPS(_ mps: Double) -> Double {
+    public func fromMPS(_ mps: Double) -> Double {
         switch self {
         case .mph: return mps * 2.236936
         case .kmh: return mps * 3.6
@@ -82,7 +82,7 @@ enum SpeedUnit: String, CaseIterable, Identifiable {
     }
 
     /// Formats speed for display with 1 decimal place and unit suffix.
-    func format(_ mps: Double) -> String {
+    public func format(_ mps: Double) -> String {
         let val = fromMPS(mps)
         return String(format: "%.1f %@", val, rawValue)
     }

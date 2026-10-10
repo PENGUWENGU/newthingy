@@ -32,6 +32,19 @@
 		EA7795A0D36F3F0AFA464944 /* SpoofSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6C3F15BC482A2CBF13B1EA6 /* SpoofSession.swift */; };
 		F42C461AA339262E17E26A10 /* SetupFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429366C3732ACF4031A7006B /* SetupFlowView.swift */; };
 		F8A8DEF1249AB260C4FF901A /* SilentAudioKeepAlive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DF917A85B507FDDCF382E2F /* SilentAudioKeepAlive.swift */; };
+		A10000000000000000000001 /* LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* LiveActivityManager.swift */; };
+		A10000000000000000000002 /* LocusRouteActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* LocusRouteActivityAttributes.swift */; };
+		A10000000000000000000003 /* RouteSimulationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* RouteSimulationEngine.swift */; };
+		A10000000000000000000004 /* TravelMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* TravelMode.swift */; };
+		A10000000000000000000005 /* FreehandTouchOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* FreehandTouchOverlay.swift */; };
+		A10000000000000000000006 /* SpeedCustomizerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* SpeedCustomizerSheet.swift */; };
+		A10000000000000000000007 /* LocusLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* LocusLiveActivityWidget.swift */; };
+		A10000000000000000000008 /* StopDurationPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000008 /* StopDurationPickerSheet.swift */; };
+		A10000000000000000000009 /* TransitRouteBannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* TransitRouteBannerView.swift */; };
+		A1000000000000000000000A /* WaypointPinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* WaypointPinView.swift */; };
+		A1000000000000000000000B /* ThemeCustomizerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000B /* ThemeCustomizerSheet.swift */; };
+		A1000000000000000000000C /* SavedRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* SavedRoute.swift */; };
+		A1000000000000000000000D /* SoundManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* SoundManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -64,6 +77,19 @@
 		F714A23C4C718E67E978565F /* MapHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapHomeView.swift; sourceTree = "<group>"; };
 		FE9BF680256F4FF39E4FECB0 /* idevice.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = idevice.h; sourceTree = "<group>"; };
 		FF1AF0F32E88B4227CA45694 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		B10000000000000000000001 /* LiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityManager.swift; sourceTree = "<group>"; };
+		B10000000000000000000002 /* LocusRouteActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocusRouteActivityAttributes.swift; sourceTree = "<group>"; };
+		B10000000000000000000003 /* RouteSimulationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouteSimulationEngine.swift; sourceTree = "<group>"; };
+		B10000000000000000000004 /* TravelMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TravelMode.swift; sourceTree = "<group>"; };
+		B10000000000000000000005 /* FreehandTouchOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreehandTouchOverlay.swift; sourceTree = "<group>"; };
+		B10000000000000000000006 /* SpeedCustomizerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedCustomizerSheet.swift; sourceTree = "<group>"; };
+		B10000000000000000000007 /* LocusLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocusLiveActivityWidget.swift; sourceTree = "<group>"; };
+		B10000000000000000000008 /* StopDurationPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StopDurationPickerSheet.swift; sourceTree = "<group>"; };
+		B10000000000000000000009 /* TransitRouteBannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitRouteBannerView.swift; sourceTree = "<group>"; };
+		B1000000000000000000000A /* WaypointPinView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaypointPinView.swift; sourceTree = "<group>"; };
+		B1000000000000000000000B /* ThemeCustomizerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeCustomizerSheet.swift; sourceTree = "<group>"; };
+		B1000000000000000000000C /* SavedRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoute.swift; sourceTree = "<group>"; };
+		B1000000000000000000000D /* SoundManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -73,6 +99,7 @@
 				361C48381EA09BB299BD110E /* LocusEasterEggView.swift */,
 				BE84038C9223A84BAFFAE233 /* PairOnDeviceView.swift */,
 				0E1C1367D937C33DF4F1FBE6 /* SettingsView.swift */,
+				B1000000000000000000000B /* ThemeCustomizerSheet.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -105,9 +132,11 @@
 		2C7F6D726AC574C9600B5F9A /* Map */ = {
 			isa = PBXGroup;
 			children = (
+				B10000000000000000000005 /* FreehandTouchOverlay.swift */,
 				797AA07D5CE5A7FD9D385F5F /* MapDropPin.swift */,
 				F714A23C4C718E67E978565F /* MapHomeView.swift */,
 				FF1AF0F32E88B4227CA45694 /* RootView.swift */,
+				B10000000000000000000006 /* SpeedCustomizerSheet.swift */,
 			);
 			path = Map;
 			sourceTree = "<group>";
@@ -163,13 +192,17 @@
 			children = (
 				5415BEF759B8C8AF04096B3E /* BackgroundKeepAlive.swift */,
 				91E2EBD3F6F937176E4EC13F /* DeviceTunnel.swift */,
+				B10000000000000000000001 /* LiveActivityManager.swift */,
 				377FB9983B927B5898D09160 /* LocationEngine.swift */,
+				B10000000000000000000002 /* LocusRouteActivityAttributes.swift */,
 				AD401B2BF295561897BDABE6 /* PairableHostAdvertiser.swift */,
 				7977CA785FF0B09F4F88DE7D /* PairingStore.swift */,
 				E2BC5277FD75A01A31B9830D /* PairOnDeviceService.swift */,
 				1FC0C702516F159A7EF6D853 /* RouteBuilder.swift */,
+				B10000000000000000000003 /* RouteSimulationEngine.swift */,
 				6DF917A85B507FDDCF382E2F /* SilentAudioKeepAlive.swift */,
 				C6C3F15BC482A2CBF13B1EA6 /* SpoofSession.swift */,
+				B10000000000000000000004 /* TravelMode.swift */,
 			);
 			path = Engine;
 			sourceTree = "<group>";
@@ -180,6 +213,8 @@
 				BFAD463F53BD704A35A8E65F /* LocalDevVPN.swift */,
 				2E6BE765DFC4FB848609C8AA /* PairingDocumentPicker.swift */,
 				799094E9B1F051BEAD82D2C1 /* SavedPlace.swift */,
+				B1000000000000000000000C /* SavedRoute.swift */,
+				B1000000000000000000000D /* SoundManager.swift */,
 				8EA9F9A2A821575AEE768E67 /* Theme.swift */,
 			);
 			path = Support;
@@ -188,7 +223,11 @@
 		B8E755C6C753821B2A8E141A /* Routes */ = {
 			isa = PBXGroup;
 			children = (
+				B10000000000000000000007 /* LocusLiveActivityWidget.swift */,
 				D76779E56819A74B78236EF1 /* RoutePlannerSheet.swift */,
+				B10000000000000000000008 /* StopDurationPickerSheet.swift */,
+				B10000000000000000000009 /* TransitRouteBannerView.swift */,
+				B1000000000000000000000A /* WaypointPinView.swift */,
 			);
 			path = Routes;
 			sourceTree = "<group>";
@@ -288,11 +327,15 @@
 			files = (
 				C5B176B29163E524B776757A /* BackgroundKeepAlive.swift in Sources */,
 				4A19A245C3B57EB4E5B02CDE /* DeviceTunnel.swift in Sources */,
+				A10000000000000000000005 /* FreehandTouchOverlay.swift in Sources */,
 				AB35A419877FF9CA0B4AB114 /* JoystickPad.swift in Sources */,
+				A10000000000000000000001 /* LiveActivityManager.swift in Sources */,
 				824D08C2AC8FD477F58DE51F /* LocalDevVPN.swift in Sources */,
 				DA2B8023B167C95C2A034C47 /* LocationEngine.swift in Sources */,
 				976D8B4B49C6B6588EA59B2F /* LocusApp.swift in Sources */,
 				1A9609434342E76342B42B54 /* LocusEasterEggView.swift in Sources */,
+				A10000000000000000000007 /* LocusLiveActivityWidget.swift in Sources */,
+				A10000000000000000000002 /* LocusRouteActivityAttributes.swift in Sources */,
 				C8CC0EF3E134ADF2BE9F995F /* MapDropPin.swift in Sources */,
 				D5613248D3DDD96C0D62BF7F /* MapHomeView.swift in Sources */,
 				41622C4D112CF14318210A71 /* PairOnDeviceService.swift in Sources */,
@@ -303,12 +346,21 @@
 				B10A777C5622EE884A890643 /* RootView.swift in Sources */,
 				8EAFB147F0F0E2AAE207D276 /* RouteBuilder.swift in Sources */,
 				87B0D41458D6AF0D39C9AAA4 /* RoutePlannerSheet.swift in Sources */,
+				A10000000000000000000003 /* RouteSimulationEngine.swift in Sources */,
 				3F84179EF76E8AA074797361 /* SavedPlace.swift in Sources */,
+				A1000000000000000000000C /* SavedRoute.swift in Sources */,
 				39FCB8C0E7050B9161E600C6 /* SettingsView.swift in Sources */,
 				F42C461AA339262E17E26A10 /* SetupFlowView.swift in Sources */,
 				F8A8DEF1249AB260C4FF901A /* SilentAudioKeepAlive.swift in Sources */,
+				A1000000000000000000000D /* SoundManager.swift in Sources */,
+				A10000000000000000000006 /* SpeedCustomizerSheet.swift in Sources */,
 				EA7795A0D36F3F0AFA464944 /* SpoofSession.swift in Sources */,
+				A10000000000000000000008 /* StopDurationPickerSheet.swift in Sources */,
 				1CBCD6A08AA473AB0CB526CA /* Theme.swift in Sources */,
+				A1000000000000000000000B /* ThemeCustomizerSheet.swift in Sources */,
+				A10000000000000000000009 /* TransitRouteBannerView.swift in Sources */,
+				A10000000000000000000004 /* TravelMode.swift in Sources */,
+				A1000000000000000000000A /* WaypointPinView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -361,7 +413,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -466,7 +518,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

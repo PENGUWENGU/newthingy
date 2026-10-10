@@ -22,6 +22,7 @@ struct RoutePlannerSheet: View {
     var onLoadRoute: (SavedRoute) -> Void
 
     @EnvironmentObject private var session: SpoofSession
+    @EnvironmentObject private var pairing: PairingStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var editingWaypoint: RouteWaypoint?

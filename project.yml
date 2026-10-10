@@ -16,8 +16,8 @@ settings:
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     CODE_SIGN_STYLE: Manual
     CODE_SIGNING_REQUIRED: NO
-    CODE_SIGNING_ALLOWED: YES
-    AD_HOC_CODE_SIGNING_ALLOWED: YES
+    CODE_SIGNING_ALLOWED: NO
+    AD_HOC_CODE_SIGNING_ALLOWED: NO
     SWIFT_COMPILATION_MODE: "wholemodule"
 targets:
   Locus:
@@ -32,8 +32,6 @@ targets:
         buildPhase: none
       - path: Vendor/idevice/idevice.h
         buildPhase: none
-    dependencies:
-      - target: LocusWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chrismack.locus
@@ -45,8 +43,8 @@ targets:
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: NO
-        CODE_SIGNING_ALLOWED: YES
-        AD_HOC_CODE_SIGNING_ALLOWED: YES
+        CODE_SIGNING_ALLOWED: NO
+        AD_HOC_CODE_SIGNING_ALLOWED: NO
         DEVELOPMENT_TEAM: ""
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: false
@@ -75,7 +73,6 @@ targets:
           - "**/Info.plist"
       - path: Locus/Engine/LocusRouteActivityAttributes.swift
       - path: Locus/Features/Routes/LocusLiveActivityWidget.swift
-      - path: Locus/Engine/TravelMode.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chrismack.locus.widgets
@@ -87,7 +84,7 @@ targets:
         SWIFT_VERSION: "5.0"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         CODE_SIGN_STYLE: Manual
-        CODE_SIGN_IDENTITY: ""
+        CODE_SIGN_IDENTITY: "-"
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: YES
         AD_HOC_CODE_SIGNING_ALLOWED: YES

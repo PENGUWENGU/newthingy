@@ -5,10 +5,11 @@ import ActivityKit
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
-#if canImport(AppIntents)
+#if canImport(AppIntents) && canImport(ActivityKit)
 import AppIntents
+import ActivityKit
 
-@available(iOS 16.0, *)
+@available(iOS 17.0, *)
 struct ToggleRouteSimulationIntent: AppIntent, LiveActivityIntent {
     static var title: LocalizedStringResource = "Pause or Resume Route"
     static var description = IntentDescription("Toggles pause state in Locus route simulation.")

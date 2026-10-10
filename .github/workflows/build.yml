@@ -35,12 +35,20 @@ jobs:
             fi
           fi
 
-          echo "Downloading official precompiled libidevice_ffi.a..."
+          echo "Downloading precompiled libidevice_ffi.a..."
+          CURRENT_REPO="${{ github.repository }}"
+          CURRENT_REF="${{ github.ref_name }}"
+          curl -sSL -f "https://raw.githubusercontent.com/${CURRENT_REPO}/${CURRENT_REF}/Vendor/idevice/libidevice_ffi.a" -o Vendor/idevice/libidevice_ffi.a || \
           curl -sSL -f "https://raw.githubusercontent.com/ChrisMack32/Locus/main/Vendor/idevice/libidevice_ffi.a" -o Vendor/idevice/libidevice_ffi.a || \
           curl -sSL -f "https://github.com/ChrisMack32/Locus/raw/main/Vendor/idevice/libidevice_ffi.a" -o Vendor/idevice/libidevice_ffi.a
 
           test -f "Vendor/idevice/libidevice_ffi.a"
-          echo "Successfully verified libidevice_ffi.a ($(wc -c < "Vendor/idevice/libidevice_ffi.a" | tr -d ' ') bytes)."
+          FILE_SIZE=$(wc -c < "Vendor/idevice/libidevice_ffi.a" | tr -d ' ')
+          if [ "$FILE_SIZE" -lt 1000000 ]; then
+            echo "::error::libidevice_ffi.a is invalid or a pointer file (${FILE_SIZE} bytes)."
+            exit 1
+          fi
+          echo "Successfully verified libidevice_ffi.a (${FILE_SIZE} bytes)."
       - name: Select Xcode
         shell: bash
         run: |
@@ -48,24 +56,16 @@ jobs:
           echo "Installed Xcode versions:"
           ls -1 /Applications | grep -E '^Xcode.*\.app$' || true
           
-          # Find and select the latest available Xcode (16.x or 15.x)
-          if [ -d "/Applications/Xcode_16.2.app" ]; then
-            sudo xcode-select -s "/Applications/Xcode_16.2.app"
-          elif [ -d "/Applications/Xcode_16.1.app" ]; then
-            sudo xcode-select -s "/Applications/Xcode_16.1.app"
-          elif [ -d "/Applications/Xcode_16.0.app" ]; then
-            sudo xcode-select -s "/Applications/Xcode_16.0.app"
-          elif ls -d /Applications/Xcode_16*.app >/dev/null 2>&1; then
-            LATEST_XCODE=$(ls -d /Applications/Xcode_16*.app | sort -V | tail -n 1)
-            sudo xcode-select -s "$LATEST_XCODE"
-          elif [ -d "/Applications/Xcode_15.4.app" ]; then
-            sudo xcode-select -s "/Applications/Xcode_15.4.app"
-          elif ls -d /Applications/Xcode_15*.app >/dev/null 2>&1; then
-            LATEST_XCODE=$(ls -d /Applications/Xcode_15*.app | sort -V | tail -n 1)
-            sudo xcode-select -s "$LATEST_XCODE"
-          elif ls -d /Applications/Xcode*.app >/dev/null 2>&1; then
-            LATEST_XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)
-            sudo xcode-select -s "$LATEST_XCODE"
+          SELECTED=""
+          for xcode_path in $(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V -r); do
+            if [ -d "$xcode_path/Contents/Developer" ]; then
+              SELECTED="$xcode_path"
+              break
+            fi
+          done
+          
+          if [ -n "$SELECTED" ]; then
+            sudo xcode-select -s "$SELECTED"
           fi
           
           echo "Selected Xcode:"
@@ -118,46 +118,13 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$PWD/build" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=YES \
-            CODE_SIGN_IDENTITY="-" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             build 2>&1 | tee build.log || STATUS=$?
-
-          if [ "$STATUS" -ne 0 ]; then
-            echo "::warning::Primary build encountered signing or extension constraint. Retrying with standalone configuration fallback..."
-            # Clean and rebuild standalone app to guarantee valid unsigned IPA delivery
-            cp project.yml project.yml.bak
-            node -e '
-              const fs = require("fs");
-              let yml = fs.readFileSync("project.yml", "utf8");
-              yml = yml.replace(/- target: LocusWidgets\n?/g, "");
-              fs.writeFileSync("project.yml", yml);
-            ' || true
-            rm -rf Locus.xcodeproj build
-            xcodegen generate --spec project.yml
-            mkdir -p build
-            STATUS=0
-            xcodebuild \
-              -project Locus.xcodeproj \
-              -scheme Locus \
-              -configuration Release \
-              -sdk iphoneos \
-              -destination 'generic/platform=iOS' \
-              -derivedDataPath "$PWD/build" \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGN_IDENTITY="" \
-              AD_HOC_CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGN_STYLE=Manual \
-              DEVELOPMENT_TEAM="" \
-              PROVISIONING_PROFILE_SPECIFIER="" \
-              build 2>&1 | tee -a build.log || STATUS=$?
-            cp project.yml.bak project.yml 2>/dev/null || true
-            rm -f project.yml.bak
-          fi
 
           if [ "$STATUS" -ne 0 ]; then
             echo "::group::❌ Compilation Errors & Diagnostics"
@@ -179,6 +146,34 @@ jobs:
             tail -n 60 build.log
             echo "::endgroup::"
             exit "$STATUS"
+          fi
+
+          # Optionally compile and embed LocusWidgets extension for Lock Screen / Dynamic Island Live Activities
+          echo "Attempting optional LocusWidgets extension build..."
+          if xcodebuild \
+            -project Locus.xcodeproj \
+            -target LocusWidgets \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$PWD/build" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_IDENTITY="-" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            build >> build.log 2>&1; then
+            APPEX="build/Build/Products/Release-iphoneos/LocusWidgets.appex"
+            APP="build/Build/Products/Release-iphoneos/Locus.app"
+            if [ -d "$APPEX" ] && [ -d "$APP" ]; then
+              mkdir -p "$APP/PlugIns"
+              cp -R "$APPEX" "$APP/PlugIns/LocusWidgets.appex"
+              codesign --remove-signature "$APP/PlugIns/LocusWidgets.appex" 2>/dev/null || true
+              echo "Successfully embedded LocusWidgets.appex into Locus.app/PlugIns."
+            fi
+          else
+            echo "Notice: Skipping optional LocusWidgets.appex embedding; standalone Locus.app built cleanly."
           fi
       - name: Locate built app
         shell: bash
