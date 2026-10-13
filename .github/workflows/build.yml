@@ -1,10 +1,27 @@
 name: Build Unsigned IPA
+
 on:
   workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'Build configuration (Release or Debug)'
+        required: false
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
   push:
-    branches: [main]
+    branches:
+      - main
+      - '**'
+  pull_request:
+    branches:
+      - main
+
 permissions:
   contents: read
+
 jobs:
   build-unsigned-ipa:
     name: Build Locus unsigned IPA
@@ -13,42 +30,61 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          lfs: true
+          lfs: false
           submodules: recursive
+
       - name: Fetch Git LFS files
         shell: bash
         run: |
           touch build.log
           git lfs pull || true
+
       - name: Ensure libidevice_ffi.a is present
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p Vendor/idevice
           
-          # Check if already present and is a valid binary archive (> 1MB)
+          # Check if already present and is a valid binary archive (> 10MB, actual is ~91MB)
           if [ -f "Vendor/idevice/libidevice_ffi.a" ]; then
             FILE_SIZE=$(wc -c < "Vendor/idevice/libidevice_ffi.a" | tr -d ' ')
-            if [ "$FILE_SIZE" -gt 1000000 ]; then
+            if [ "$FILE_SIZE" -gt 10000000 ]; then
               echo "libidevice_ffi.a is already present and valid (${FILE_SIZE} bytes)."
               exit 0
             fi
+            echo "libidevice_ffi.a is only ${FILE_SIZE} bytes (likely a pointer or truncated file); re-downloading..."
+            rm -f "Vendor/idevice/libidevice_ffi.a"
           fi
 
           echo "Downloading precompiled libidevice_ffi.a..."
           CURRENT_REPO="${{ github.repository }}"
           CURRENT_REF="${{ github.ref_name }}"
-          curl -sSL -f "https://raw.githubusercontent.com/${CURRENT_REPO}/${CURRENT_REF}/Vendor/idevice/libidevice_ffi.a" -o Vendor/idevice/libidevice_ffi.a || \
-          curl -sSL -f "https://raw.githubusercontent.com/ChrisMack32/Locus/main/Vendor/idevice/libidevice_ffi.a" -o Vendor/idevice/libidevice_ffi.a || \
-          curl -sSL -f "https://github.com/ChrisMack32/Locus/raw/main/Vendor/idevice/libidevice_ffi.a" -o Vendor/idevice/libidevice_ffi.a
-
-          test -f "Vendor/idevice/libidevice_ffi.a"
-          FILE_SIZE=$(wc -c < "Vendor/idevice/libidevice_ffi.a" | tr -d ' ')
-          if [ "$FILE_SIZE" -lt 1000000 ]; then
-            echo "::error::libidevice_ffi.a is invalid or a pointer file (${FILE_SIZE} bytes)."
+          
+          DOWNLOADED=0
+          URLS=(
+            "https://raw.githubusercontent.com/ChrisMack32/Locus/main/Vendor/idevice/libidevice_ffi.a"
+            "https://github.com/ChrisMack32/Locus/raw/main/Vendor/idevice/libidevice_ffi.a"
+            "https://raw.githubusercontent.com/${CURRENT_REPO}/${CURRENT_REF}/Vendor/idevice/libidevice_ffi.a"
+          )
+          
+          for url in "${URLS[@]}"; do
+            echo "Trying URL: $url"
+            if curl -sSL -f --retry 3 --connect-timeout 15 "$url" -o Vendor/idevice/libidevice_ffi.a; then
+              FILE_SIZE=$(wc -c < "Vendor/idevice/libidevice_ffi.a" | tr -d ' ')
+              if [ "$FILE_SIZE" -gt 10000000 ]; then
+                echo "Successfully downloaded libidevice_ffi.a (${FILE_SIZE} bytes)."
+                DOWNLOADED=1
+                break
+              fi
+            fi
+            rm -f "Vendor/idevice/libidevice_ffi.a"
+          done
+          
+          if [ "$DOWNLOADED" -ne 1 ]; then
+            echo "::error::Failed to obtain valid libidevice_ffi.a binary."
             exit 1
           fi
-          echo "Successfully verified libidevice_ffi.a (${FILE_SIZE} bytes)."
+
       - name: Select Xcode
         shell: bash
         run: |
@@ -57,15 +93,27 @@ jobs:
           ls -1 /Applications | grep -E '^Xcode.*\.app$' || true
           
           SELECTED=""
-          for xcode_path in $(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V -r); do
+          for xcode_path in $(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V -r); do
             if [ -d "$xcode_path/Contents/Developer" ]; then
               SELECTED="$xcode_path"
               break
             fi
           done
           
+          if [ -z "$SELECTED" ]; then
+            for xcode_path in $(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V -r); do
+              if [ -d "$xcode_path/Contents/Developer" ]; then
+                SELECTED="$xcode_path"
+                break
+              fi
+            done
+          fi
+          
           if [ -n "$SELECTED" ]; then
+            echo "Switching to $SELECTED"
             sudo xcode-select -s "$SELECTED"
+            echo "DEVELOPER_DIR=$SELECTED/Contents/Developer" >> "$GITHUB_ENV"
+            export DEVELOPER_DIR="$SELECTED/Contents/Developer"
           fi
           
           echo "Selected Xcode:"
@@ -73,14 +121,16 @@ jobs:
           echo
           echo "iPhoneOS SDKs:"
           xcodebuild -showsdks | grep -i iphoneos || true
+
       - name: Install XcodeGen
         shell: bash
         run: |
           set -euo pipefail
           if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
+            HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install xcodegen
           fi
           xcodegen version
+
       - name: Generate Xcode project
         shell: bash
         run: |
@@ -88,32 +138,36 @@ jobs:
           rm -rf Locus.xcodeproj
           xcodegen generate --spec project.yml
           test -d Locus.xcodeproj
+
       - name: Show build configuration
         shell: bash
         run: |
           set -euo pipefail
           echo "Schemes:"
-          xcodebuild \
-            -project Locus.xcodeproj \
-            -list
+          xcodebuild -project Locus.xcodeproj -list
           echo
           echo "Project deployment target:"
           grep -n 'deploymentTarget\|IPHONEOS_DEPLOYMENT_TARGET\|xcodeVersion' project.yml || true
+
       - name: Clean build
         shell: bash
         run: |
           set -euo pipefail
           rm -rf build
           mkdir -p build
+
       - name: Build unsigned iOS app
         shell: bash
         run: |
           set -o pipefail
+          CONFIG="${{ inputs.configuration || 'Release' }}"
+          echo "Building Locus configuration: $CONFIG"
+          
           STATUS=0
           xcodebuild \
             -project Locus.xcodeproj \
             -scheme Locus \
-            -configuration Release \
+            -configuration "$CONFIG" \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$PWD/build" \
@@ -124,7 +178,44 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
+            CODE_SIGN_ENTITLEMENTS="" \
             build 2>&1 | tee build.log || STATUS=$?
+
+          if [ "$STATUS" -ne 0 ]; then
+            echo "Primary build exited with code $STATUS. Running standalone fallback..."
+            echo "=========================================="
+            grep -E 'error: ' build.log | tail -n 25 || true
+            echo "=========================================="
+            
+            node -e '
+              const fs = require("fs");
+              let yml = fs.readFileSync("project.yml", "utf8");
+              yml = yml.replace(/\n\s*LocusWidgets:[\s\S]*?(?=\n\s*[A-Za-z0-9_]+:|$)/, "\n");
+              yml = yml.replace(/\n\s*dependencies:\s*\n\s*-\s*target:\s*LocusWidgets\s*\n/g, "\n");
+              fs.writeFileSync("project.yml", yml);
+            '
+            rm -rf Locus.xcodeproj build
+            mkdir -p build
+            xcodegen generate --spec project.yml
+            
+            STATUS=0
+            xcodebuild \
+              -project Locus.xcodeproj \
+              -scheme Locus \
+              -configuration "$CONFIG" \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath "$PWD/build" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGN_IDENTITY="" \
+              AD_HOC_CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGN_STYLE=Manual \
+              DEVELOPMENT_TEAM="" \
+              PROVISIONING_PROFILE_SPECIFIER="" \
+              CODE_SIGN_ENTITLEMENTS="" \
+              build 2>&1 | tee -a build.log || STATUS=$?
+          fi
 
           if [ "$STATUS" -ne 0 ]; then
             echo "::group::❌ Compilation Errors & Diagnostics"
@@ -148,93 +239,101 @@ jobs:
             exit "$STATUS"
           fi
 
-          # Optionally compile and embed LocusWidgets extension for Lock Screen / Dynamic Island Live Activities
-          echo "Attempting optional LocusWidgets extension build..."
-          if xcodebuild \
-            -project Locus.xcodeproj \
-            -target LocusWidgets \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath "$PWD/build" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=YES \
-            CODE_SIGN_IDENTITY="-" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            build >> build.log 2>&1; then
-            APPEX="build/Build/Products/Release-iphoneos/LocusWidgets.appex"
-            APP="build/Build/Products/Release-iphoneos/Locus.app"
-            if [ -d "$APPEX" ] && [ -d "$APP" ]; then
-              mkdir -p "$APP/PlugIns"
-              cp -R "$APPEX" "$APP/PlugIns/LocusWidgets.appex"
-              codesign --remove-signature "$APP/PlugIns/LocusWidgets.appex" 2>/dev/null || true
-              echo "Successfully embedded LocusWidgets.appex into Locus.app/PlugIns."
+          # Optional: compile and embed LocusWidgets extension if present in project
+          if grep -q "LocusWidgets:" project.yml 2>/dev/null; then
+            echo "Attempting optional LocusWidgets extension build..."
+            if xcodebuild \
+              -project Locus.xcodeproj \
+              -target LocusWidgets \
+              -configuration "$CONFIG" \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath "$PWD/build" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=YES \
+              CODE_SIGN_IDENTITY="-" \
+              AD_HOC_CODE_SIGNING_ALLOWED=YES \
+              CODE_SIGN_STYLE=Manual \
+              DEVELOPMENT_TEAM="" \
+              PROVISIONING_PROFILE_SPECIFIER="" \
+              build >> build.log 2>&1; then
+              APPEX=$(find "$PWD/build/Build/Products" -name "LocusWidgets.appex" -type d | head -n 1)
+              APP=$(find "$PWD/build/Build/Products" -name "Locus.app" -type d | head -n 1)
+              if [ -n "$APPEX" ] && [ -n "$APP" ]; then
+                mkdir -p "$APP/PlugIns"
+                cp -R "$APPEX" "$APP/PlugIns/LocusWidgets.appex"
+                codesign --remove-signature "$APP/PlugIns/LocusWidgets.appex" 2>/dev/null || true
+                echo "Successfully embedded LocusWidgets.appex into Locus.app/PlugIns."
+              fi
+            else
+              echo "Notice: Skipping optional LocusWidgets.appex embedding; standalone Locus.app built cleanly."
             fi
-          else
-            echo "Notice: Skipping optional LocusWidgets.appex embedding; standalone Locus.app built cleanly."
           fi
+
       - name: Locate built app
         shell: bash
         run: |
           set -euo pipefail
-          APP="build/Build/Products/Release-iphoneos/Locus.app"
-          if [ ! -d "$APP" ]; then
+          APP=$(find "$PWD/build/Build/Products" -name "Locus.app" -type d | head -n 1)
+          if [ -z "$APP" ] || [ ! -d "$APP" ]; then
             echo "::error::Locus.app was not produced."
             echo
             echo "Release products:"
             find build/Build/Products -maxdepth 4 -type d -print || true
             exit 1
           fi
-          echo "Found:"
+          echo "APP_PATH=$APP" >> "$GITHUB_ENV"
+          echo "Found app bundle at: $APP"
           du -sh "$APP"
-          echo "$APP"
+
       - name: Verify app is unsigned
         shell: bash
         run: |
           set -euo pipefail
-          APP="build/Build/Products/Release-iphoneos/Locus.app"
-          echo "Checking code signature..."
-          if codesign -dvv "$APP" 2>&1 | grep -q "Authority="; then
-            echo "::error::The application is signed."
-            codesign -dvv "$APP" 2>&1 || true
+          APP="${APP_PATH}"
+          echo "Checking code signature for $APP..."
+          SIG_INFO=$(codesign -dvv "$APP" 2>&1 || true)
+          echo "$SIG_INFO"
+          if echo "$SIG_INFO" | grep -q "Authority="; then
+            echo "::error::The application is signed with an authority."
             exit 1
           fi
-          echo "No signing authority found."
+          echo "Verified: No signing authority found."
+
       - name: Create IPA
         shell: bash
         run: |
           set -euo pipefail
-          APP="build/Build/Products/Release-iphoneos/Locus.app"
+          APP="${APP_PATH}"
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP" Payload/Locus.app
-          rm -f LocusPlus-unsigned.ipa
-          /usr/bin/zip \
-            -qry \
-            LocusPlus-unsigned.ipa \
-            Payload
+          rm -f LocusPlus-unsigned.ipa Locus-unsigned.ipa
+          /usr/bin/zip -qry LocusPlus-unsigned.ipa Payload
+          cp LocusPlus-unsigned.ipa Locus-unsigned.ipa
           test -f LocusPlus-unsigned.ipa
-          echo "IPA created:"
+          echo "IPA created successfully:"
           ls -lh LocusPlus-unsigned.ipa
+
       - name: Verify IPA contents
         shell: bash
         run: |
           set -euo pipefail
           /usr/bin/unzip -t LocusPlus-unsigned.ipa
           echo
-          echo "IPA contents:"
-          /usr/bin/unzip -l LocusPlus-unsigned.ipa | head -50
+          echo "IPA contents summary:"
+          /usr/bin/unzip -l LocusPlus-unsigned.ipa | head -n 50
           echo
           echo "IPA verification passed."
+
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: LocusPlus-unsigned-IPA
+          name: LocusPlus-unsigned
           path: LocusPlus-unsigned.ipa
           if-no-files-found: error
           retention-days: 30
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
