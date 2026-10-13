@@ -39,12 +39,12 @@ targets:
         MARKETING_VERSION: "1.0.2"
         CURRENT_PROJECT_VERSION: "3"
         INFOPLIST_FILE: Locus/Resources/Info.plist
-        CODE_SIGN_ENTITLEMENTS: Locus/Resources/Locus.entitlements
+        CODE_SIGN_ENTITLEMENTS: ""
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
-        AD_HOC_CODE_SIGNING_ALLOWED: NO
+        AD_HOC_CODE_SIGNING_ALLOWED: YES
         DEVELOPMENT_TEAM: ""
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: false
@@ -118,3 +118,14 @@ targets:
         ENABLE_BITCODE: NO
         SUPPORTS_MACCATALYST: NO
         SWIFT_COMPILATION_MODE: "wholemodule"
+
+schemes:
+  Locus:
+    build:
+      targets:
+        Locus: all
+    run:
+      config: Release
+    test:
+      targets:
+        - LocusTests

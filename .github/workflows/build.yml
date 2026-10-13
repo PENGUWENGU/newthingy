@@ -65,11 +65,13 @@ jobs:
             "https://raw.githubusercontent.com/ChrisMack32/Locus/main/Vendor/idevice/libidevice_ffi.a"
             "https://github.com/ChrisMack32/Locus/raw/main/Vendor/idevice/libidevice_ffi.a"
             "https://raw.githubusercontent.com/${CURRENT_REPO}/${CURRENT_REF}/Vendor/idevice/libidevice_ffi.a"
+            "https://raw.githubusercontent.com/${CURRENT_REPO}/main/Vendor/idevice/libidevice_ffi.a"
+            "https://github.com/${CURRENT_REPO}/raw/main/Vendor/idevice/libidevice_ffi.a"
           )
           
           for url in "${URLS[@]}"; do
             echo "Trying URL: $url"
-            if curl -sSL -f --retry 3 --connect-timeout 15 "$url" -o Vendor/idevice/libidevice_ffi.a; then
+            if curl -sSL -f --retry 3 --retry-delay 2 --connect-timeout 20 "$url" -o Vendor/idevice/libidevice_ffi.a; then
               FILE_SIZE=$(wc -c < "Vendor/idevice/libidevice_ffi.a" | tr -d ' ')
               if [ "$FILE_SIZE" -gt 10000000 ]; then
                 echo "Successfully downloaded libidevice_ffi.a (${FILE_SIZE} bytes)."
@@ -163,30 +165,48 @@ jobs:
           CONFIG="${{ inputs.configuration || 'Release' }}"
           echo "Building Locus configuration: $CONFIG"
           
-          STATUS=0
-          xcodebuild \
-            -project Locus.xcodeproj \
-            -scheme Locus \
-            -configuration "$CONFIG" \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$PWD/build" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            CODE_SIGN_ENTITLEMENTS="" \
-            build 2>&1 | tee build.log || STATUS=$?
-
-          if [ "$STATUS" -ne 0 ]; then
-            echo "Primary build exited with code $STATUS. Running standalone fallback..."
-            echo "=========================================="
-            grep -E 'error: ' build.log | tail -n 25 || true
-            echo "=========================================="
+          run_xcodebuild() {
+            local sign_allowed="$1"
+            local sign_id="$2"
+            local adhoc_allowed="$3"
             
+            echo "--- Executing xcodebuild (CODE_SIGNING_ALLOWED=$sign_allowed, IDENTITY=\"$sign_id\") ---"
+            xcodebuild \
+              -project Locus.xcodeproj \
+              -scheme Locus \
+              -configuration "$CONFIG" \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath "$PWD/build" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED="$sign_allowed" \
+              CODE_SIGN_IDENTITY="$sign_id" \
+              AD_HOC_CODE_SIGNING_ALLOWED="$adhoc_allowed" \
+              CODE_SIGN_STYLE=Manual \
+              DEVELOPMENT_TEAM="" \
+              PROVISIONING_PROFILE_SPECIFIER="" \
+              CODE_SIGN_ENTITLEMENTS="" \
+              COMPILER_INDEX_STORE_ENABLE=NO \
+              build 2>&1 | tee -a build.log
+          }
+
+          # Attempt 1: Strictly unsigned build
+          STATUS=0
+          echo "Attempting Mode 1: Fully unsigned build..."
+          run_xcodebuild NO "" NO || STATUS=$?
+
+          # Attempt 2: If Xcode enforces code signing for application bundles, use Ad-Hoc identity ("-")
+          if [ "$STATUS" -ne 0 ]; then
+            echo "Notice: Mode 1 exited with code $STATUS. Retrying with Mode 2: Ad-Hoc unsigned/development identity ('-')..."
+            rm -rf build
+            mkdir -p build
+            STATUS=0
+            run_xcodebuild YES "-" YES || STATUS=$?
+          fi
+
+          # Attempt 3: Standalone app fallback (without LocusWidgets extension) if needed
+          if [ "$STATUS" -ne 0 ] && grep -q "LocusWidgets:" project.yml 2>/dev/null; then
+            echo "Notice: Retrying with standalone Locus app without widget extension..."
             node -e '
               const fs = require("fs");
               let yml = fs.readFileSync("project.yml", "utf8");
@@ -199,22 +219,7 @@ jobs:
             xcodegen generate --spec project.yml
             
             STATUS=0
-            xcodebuild \
-              -project Locus.xcodeproj \
-              -scheme Locus \
-              -configuration "$CONFIG" \
-              -sdk iphoneos \
-              -destination 'generic/platform=iOS' \
-              -derivedDataPath "$PWD/build" \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGN_IDENTITY="" \
-              AD_HOC_CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGN_STYLE=Manual \
-              DEVELOPMENT_TEAM="" \
-              PROVISIONING_PROFILE_SPECIFIER="" \
-              CODE_SIGN_ENTITLEMENTS="" \
-              build 2>&1 | tee -a build.log || STATUS=$?
+            run_xcodebuild YES "-" YES || STATUS=$?
           fi
 
           if [ "$STATUS" -ne 0 ]; then
@@ -256,6 +261,8 @@ jobs:
               CODE_SIGN_STYLE=Manual \
               DEVELOPMENT_TEAM="" \
               PROVISIONING_PROFILE_SPECIFIER="" \
+              CODE_SIGN_ENTITLEMENTS="" \
+              COMPILER_INDEX_STORE_ENABLE=NO \
               build >> build.log 2>&1; then
               APPEX=$(find "$PWD/build/Build/Products" -name "LocusWidgets.appex" -type d | head -n 1)
               APP=$(find "$PWD/build/Build/Products" -name "Locus.app" -type d | head -n 1)
@@ -313,7 +320,7 @@ jobs:
           cp LocusPlus-unsigned.ipa Locus-unsigned.ipa
           test -f LocusPlus-unsigned.ipa
           echo "IPA created successfully:"
-          ls -lh LocusPlus-unsigned.ipa
+          ls -lh LocusPlus-unsigned.ipa Locus-unsigned.ipa
 
       - name: Verify IPA contents
         shell: bash
@@ -326,7 +333,7 @@ jobs:
           echo
           echo "IPA verification passed."
 
-      - name: Upload unsigned IPA
+      - name: Upload unsigned IPA (LocusPlus-unsigned)
         uses: actions/upload-artifact@v4
         with:
           name: LocusPlus-unsigned
@@ -334,11 +341,19 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload build log
+      - name: Upload unsigned IPA (Locus-unsigned)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Locus-unsigned
+          path: Locus-unsigned.ipa
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: LocusPlus-build-log
+          name: build-logs
           path: build.log
           if-no-files-found: ignore
           retention-days: 7
