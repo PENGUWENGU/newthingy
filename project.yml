@@ -121,6 +121,7 @@ targets:
 
 schemes:
   Locus:
+    shared: true
     build:
       targets:
         Locus: all

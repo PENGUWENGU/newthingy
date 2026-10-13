@@ -26,6 +26,8 @@ jobs:
   build-unsigned-ipa:
     name: Build Locus unsigned IPA
     runs-on: macos-latest
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "true"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -170,14 +172,16 @@ jobs:
             local sign_id="$2"
             local adhoc_allowed="$3"
             
-            echo "--- Executing xcodebuild (CODE_SIGNING_ALLOWED=$sign_allowed, IDENTITY=\"$sign_id\") ---"
+            echo "--- Executing xcodebuild archive (CODE_SIGNING_ALLOWED=$sign_allowed, IDENTITY=\"$sign_id\") ---"
+            
+            # Step A: Attempt xcodebuild archive
+            local ARCHIVE_STATUS=0
             xcodebuild \
               -project Locus.xcodeproj \
               -scheme Locus \
               -configuration "$CONFIG" \
-              -sdk iphoneos \
               -destination 'generic/platform=iOS' \
-              -derivedDataPath "$PWD/build" \
+              -archivePath "$PWD/build/Locus.xcarchive" \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGNING_ALLOWED="$sign_allowed" \
               CODE_SIGN_IDENTITY="$sign_id" \
@@ -187,7 +191,38 @@ jobs:
               PROVISIONING_PROFILE_SPECIFIER="" \
               CODE_SIGN_ENTITLEMENTS="" \
               COMPILER_INDEX_STORE_ENABLE=NO \
-              build 2>&1 | tee -a build.log
+              archive 2>&1 | tee -a build.log || ARCHIVE_STATUS=${PIPESTATUS[0]}
+
+            if [ "$ARCHIVE_STATUS" -eq 0 ] && [ -d "$PWD/build/Locus.xcarchive/Products/Applications/Locus.app" ]; then
+              echo "Archive succeeded: found Locus.app in xcarchive."
+              return 0
+            fi
+
+            echo "Archive mode did not produce Locus.app (status $ARCHIVE_STATUS). Falling back to direct build action..."
+
+            # Step B: Fallback to direct build action with explicit build directories
+            local BUILD_STATUS=0
+            xcodebuild \
+              -project Locus.xcodeproj \
+              -scheme Locus \
+              -configuration "$CONFIG" \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath "$PWD/build/DerivedData" \
+              SYMROOT="$PWD/build/Products" \
+              CONFIGURATION_BUILD_DIR="$PWD/build/Products" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED="$sign_allowed" \
+              CODE_SIGN_IDENTITY="$sign_id" \
+              AD_HOC_CODE_SIGNING_ALLOWED="$adhoc_allowed" \
+              CODE_SIGN_STYLE=Manual \
+              DEVELOPMENT_TEAM="" \
+              PROVISIONING_PROFILE_SPECIFIER="" \
+              CODE_SIGN_ENTITLEMENTS="" \
+              COMPILER_INDEX_STORE_ENABLE=NO \
+              build 2>&1 | tee -a build.log || BUILD_STATUS=${PIPESTATUS[0]}
+
+            return "$BUILD_STATUS"
           }
 
           # Attempt 1: Strictly unsigned build
@@ -210,8 +245,7 @@ jobs:
             node -e '
               const fs = require("fs");
               let yml = fs.readFileSync("project.yml", "utf8");
-              yml = yml.replace(/\n\s*LocusWidgets:[\s\S]*?(?=\n\s*[A-Za-z0-9_]+:|$)/, "\n");
-              yml = yml.replace(/\n\s*dependencies:\s*\n\s*-\s*target:\s*LocusWidgets\s*\n/g, "\n");
+              yml = yml.replace(/\n  LocusWidgets:\n(?:    [^\n]*\n)*/g, "\n");
               fs.writeFileSync("project.yml", yml);
             '
             rm -rf Locus.xcodeproj build
@@ -253,7 +287,8 @@ jobs:
               -configuration "$CONFIG" \
               -sdk iphoneos \
               -destination 'generic/platform=iOS' \
-              -derivedDataPath "$PWD/build" \
+              -derivedDataPath "$PWD/build/DerivedData" \
+              SYMROOT="$PWD/build/Products" \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGNING_ALLOWED=YES \
               CODE_SIGN_IDENTITY="-" \
@@ -264,8 +299,8 @@ jobs:
               CODE_SIGN_ENTITLEMENTS="" \
               COMPILER_INDEX_STORE_ENABLE=NO \
               build >> build.log 2>&1; then
-              APPEX=$(find "$PWD/build/Build/Products" -name "LocusWidgets.appex" -type d | head -n 1)
-              APP=$(find "$PWD/build/Build/Products" -name "Locus.app" -type d | head -n 1)
+              APPEX=$(find "$PWD/build" -name "LocusWidgets.appex" -type d 2>/dev/null | head -n 1)
+              APP=$(find "$PWD/build" -name "Locus.app" -type d 2>/dev/null | head -n 1)
               if [ -n "$APPEX" ] && [ -n "$APP" ]; then
                 mkdir -p "$APP/PlugIns"
                 cp -R "$APPEX" "$APP/PlugIns/LocusWidgets.appex"
@@ -281,17 +316,60 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APP=$(find "$PWD/build/Build/Products" -name "Locus.app" -type d | head -n 1)
+          APP=""
+          
+          CANDIDATES=(
+            "$PWD/build/Locus.xcarchive/Products/Applications/Locus.app"
+            "$PWD/build/Products/Locus.app"
+            "$PWD/build/Products/${CONFIG:-Release}-iphoneos/Locus.app"
+            "$PWD/build/DerivedData/Build/Products/${CONFIG:-Release}-iphoneos/Locus.app"
+            "$PWD/build/Build/Products/${CONFIG:-Release}-iphoneos/Locus.app"
+            "$PWD/build/DerivedData/Build/Products/Release-iphoneos/Locus.app"
+            "$PWD/build/Build/Products/Release-iphoneos/Locus.app"
+          )
+          for candidate in "${CANDIDATES[@]}"; do
+            if [ -d "$candidate" ]; then
+              APP="$candidate"
+              echo "Discovered app at candidate path: $APP"
+              break
+            fi
+          done
+
+          if [ -z "$APP" ]; then
+            APP=$(find "$PWD/build" -name "Locus.app" -type d 2>/dev/null | head -n 1 || true)
+          fi
+
+          if [ -z "$APP" ]; then
+            APP=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "Locus.app" -type d 2>/dev/null | head -n 1 || true)
+          fi
+
+          if [ -z "$APP" ]; then
+            APP=$(find "$PWD" -name "*.app" -type d -not -path "*/.*" 2>/dev/null | head -n 1 || true)
+          fi
+
           if [ -z "$APP" ] || [ ! -d "$APP" ]; then
             echo "::error::Locus.app was not produced."
             echo
-            echo "Release products:"
-            find build/Build/Products -maxdepth 4 -type d -print || true
+            echo "Contents of build directory:"
+            find "$PWD/build" -maxdepth 5 2>/dev/null || true
             exit 1
           fi
-          echo "APP_PATH=$APP" >> "$GITHUB_ENV"
-          echo "Found app bundle at: $APP"
-          du -sh "$APP"
+
+          # Prepare clean staging app directory
+          mkdir -p "$PWD/build/StagedApp"
+          rm -rf "$PWD/build/StagedApp/Locus.app"
+          cp -R "$APP" "$PWD/build/StagedApp/Locus.app"
+          STAGED="$PWD/build/StagedApp/Locus.app"
+
+          # Cleanly remove any residual or ad-hoc signatures for sideloading
+          codesign --remove-signature "$STAGED" 2>/dev/null || true
+          if [ -d "$STAGED/PlugIns/LocusWidgets.appex" ]; then
+            codesign --remove-signature "$STAGED/PlugIns/LocusWidgets.appex" 2>/dev/null || true
+          fi
+
+          echo "APP_PATH=$STAGED" >> "$GITHUB_ENV"
+          echo "Found app bundle at: $STAGED"
+          du -sh "$STAGED"
 
       - name: Verify app is unsigned
         shell: bash
@@ -305,7 +383,7 @@ jobs:
             echo "::error::The application is signed with an authority."
             exit 1
           fi
-          echo "Verified: No signing authority found."
+          echo "Verified: No signing authority found (ready for sideloading)."
 
       - name: Create IPA
         shell: bash
