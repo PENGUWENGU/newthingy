@@ -25,12 +25,10 @@ permissions:
 jobs:
   build-unsigned-ipa:
     name: Build Locus unsigned IPA
-    runs-on: macos-latest
-    env:
-      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "true"
+    runs-on: macos-14
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
           lfs: false
           submodules: recursive
@@ -167,41 +165,39 @@ jobs:
           CONFIG="${{ inputs.configuration || 'Release' }}"
           echo "Building Locus configuration: $CONFIG"
           
-          run_xcodebuild() {
-            local sign_allowed="$1"
-            local sign_id="$2"
-            local adhoc_allowed="$3"
-            
-            echo "--- Executing xcodebuild archive (CODE_SIGNING_ALLOWED=$sign_allowed, IDENTITY=\"$sign_id\") ---"
-            
-            # Step A: Attempt xcodebuild archive
-            local ARCHIVE_STATUS=0
+          build_archive() {
+            echo "--- Executing xcodebuild archive with ad-hoc signing ('-') ---"
+            rm -rf "$PWD/build/Locus.xcarchive"
+            local STATUS=0
             xcodebuild \
               -project Locus.xcodeproj \
               -scheme Locus \
               -configuration "$CONFIG" \
               -destination 'generic/platform=iOS' \
               -archivePath "$PWD/build/Locus.xcarchive" \
+              SKIP_INSTALL=NO \
               CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED="$sign_allowed" \
-              CODE_SIGN_IDENTITY="$sign_id" \
-              AD_HOC_CODE_SIGNING_ALLOWED="$adhoc_allowed" \
+              CODE_SIGNING_ALLOWED=YES \
+              CODE_SIGN_IDENTITY="-" \
+              AD_HOC_CODE_SIGNING_ALLOWED=YES \
               CODE_SIGN_STYLE=Manual \
               DEVELOPMENT_TEAM="" \
               PROVISIONING_PROFILE_SPECIFIER="" \
               CODE_SIGN_ENTITLEMENTS="" \
               COMPILER_INDEX_STORE_ENABLE=NO \
-              archive 2>&1 | tee -a build.log || ARCHIVE_STATUS=${PIPESTATUS[0]}
+              archive 2>&1 | tee -a build.log || STATUS=${PIPESTATUS[0]}
 
-            if [ "$ARCHIVE_STATUS" -eq 0 ] && [ -d "$PWD/build/Locus.xcarchive/Products/Applications/Locus.app" ]; then
-              echo "Archive succeeded: found Locus.app in xcarchive."
+            if [ "$STATUS" -eq 0 ] && [ -d "$PWD/build/Locus.xcarchive/Products/Applications/Locus.app" ]; then
+              echo "Archive succeeded: found Locus.app at $PWD/build/Locus.xcarchive/Products/Applications/Locus.app"
               return 0
             fi
+            echo "Archive did not produce Locus.app (exit code $STATUS)."
+            return 1
+          }
 
-            echo "Archive mode did not produce Locus.app (status $ARCHIVE_STATUS). Falling back to direct build action..."
-
-            # Step B: Fallback to direct build action with explicit build directories
-            local BUILD_STATUS=0
+          build_direct() {
+            echo "--- Executing direct xcodebuild build to DerivedData ---"
+            local STATUS=0
             xcodebuild \
               -project Locus.xcodeproj \
               -scheme Locus \
@@ -209,54 +205,71 @@ jobs:
               -sdk iphoneos \
               -destination 'generic/platform=iOS' \
               -derivedDataPath "$PWD/build/DerivedData" \
-              SYMROOT="$PWD/build/Products" \
-              CONFIGURATION_BUILD_DIR="$PWD/build/Products" \
               CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED="$sign_allowed" \
-              CODE_SIGN_IDENTITY="$sign_id" \
-              AD_HOC_CODE_SIGNING_ALLOWED="$adhoc_allowed" \
+              CODE_SIGNING_ALLOWED=YES \
+              CODE_SIGN_IDENTITY="-" \
+              AD_HOC_CODE_SIGNING_ALLOWED=YES \
               CODE_SIGN_STYLE=Manual \
               DEVELOPMENT_TEAM="" \
               PROVISIONING_PROFILE_SPECIFIER="" \
               CODE_SIGN_ENTITLEMENTS="" \
               COMPILER_INDEX_STORE_ENABLE=NO \
-              build 2>&1 | tee -a build.log || BUILD_STATUS=${PIPESTATUS[0]}
+              build 2>&1 | tee -a build.log || STATUS=${PIPESTATUS[0]}
 
-            return "$BUILD_STATUS"
+            local APP_FOUND
+            APP_FOUND=$(find "$PWD/build" -name "Locus.app" -type d 2>/dev/null | head -n 1)
+            if [ -n "$APP_FOUND" ] && [ -d "$APP_FOUND" ]; then
+              echo "Direct build succeeded: found Locus.app at $APP_FOUND"
+              return 0
+            fi
+            echo "Direct build did not produce Locus.app (exit code $STATUS)."
+            return 1
           }
 
-          # Attempt 1: Strictly unsigned build
-          STATUS=0
-          echo "Attempting Mode 1: Fully unsigned build..."
-          run_xcodebuild NO "" NO || STATUS=$?
-
-          # Attempt 2: If Xcode enforces code signing for application bundles, use Ad-Hoc identity ("-")
-          if [ "$STATUS" -ne 0 ]; then
-            echo "Notice: Mode 1 exited with code $STATUS. Retrying with Mode 2: Ad-Hoc unsigned/development identity ('-')..."
-            rm -rf build
-            mkdir -p build
-            STATUS=0
-            run_xcodebuild YES "-" YES || STATUS=$?
+          # Attempt 1: Standard Archive with ad-hoc signing
+          BUILD_SUCCESS=0
+          if build_archive; then
+            BUILD_SUCCESS=1
+          elif build_direct; then
+            BUILD_SUCCESS=1
           fi
 
-          # Attempt 3: Standalone app fallback (without LocusWidgets extension) if needed
-          if [ "$STATUS" -ne 0 ] && grep -q "LocusWidgets:" project.yml 2>/dev/null; then
+          # Attempt 2: If build failed and LocusWidgets is present, strip extension and retry standalone
+          if [ "$BUILD_SUCCESS" -ne 1 ] && grep -q "LocusWidgets:" project.yml 2>/dev/null; then
             echo "Notice: Retrying with standalone Locus app without widget extension..."
             node -e '
               const fs = require("fs");
-              let yml = fs.readFileSync("project.yml", "utf8");
-              yml = yml.replace(/\n  LocusWidgets:\n(?:    [^\n]*\n)*/g, "\n");
-              fs.writeFileSync("project.yml", yml);
+              let content = fs.readFileSync("project.yml", "utf8");
+              const lines = content.split("\n");
+              const filtered = [];
+              let skipping = false;
+              for (const line of lines) {
+                if (/^  LocusWidgets:/.test(line)) {
+                  skipping = true;
+                  continue;
+                }
+                if (skipping && /^[a-zA-Z0-9_]/.test(line)) {
+                  skipping = false;
+                } else if (skipping && /^  [a-zA-Z0-9_]/.test(line)) {
+                  skipping = false;
+                }
+                if (!skipping) {
+                  filtered.push(line);
+                }
+              }
+              fs.writeFileSync("project.yml", filtered.join("\n"));
             '
-            rm -rf Locus.xcodeproj build
-            mkdir -p build
+            rm -rf Locus.xcodeproj build/DerivedData build/Locus.xcarchive
             xcodegen generate --spec project.yml
             
-            STATUS=0
-            run_xcodebuild YES "-" YES || STATUS=$?
+            if build_archive; then
+              BUILD_SUCCESS=1
+            elif build_direct; then
+              BUILD_SUCCESS=1
+            fi
           fi
 
-          if [ "$STATUS" -ne 0 ]; then
+          if [ "$BUILD_SUCCESS" -ne 1 ]; then
             echo "::group::❌ Compilation Errors & Diagnostics"
             echo "=========================================="
             echo "       BUILD FAILED - ERROR SUMMARY       "
@@ -272,13 +285,13 @@ jobs:
               fi
             done
             echo "=========================================="
-            echo "Last 60 lines of build.log:"
-            tail -n 60 build.log
+            echo "Last 80 lines of build.log:"
+            tail -n 80 build.log
             echo "::endgroup::"
-            exit "$STATUS"
+            exit 1
           fi
 
-          # Optional: compile and embed LocusWidgets extension if present in project
+          # Optional: compile and embed LocusWidgets extension if present in project and standalone app succeeded
           if grep -q "LocusWidgets:" project.yml 2>/dev/null; then
             echo "Attempting optional LocusWidgets extension build..."
             if xcodebuild \
@@ -288,7 +301,6 @@ jobs:
               -sdk iphoneos \
               -destination 'generic/platform=iOS' \
               -derivedDataPath "$PWD/build/DerivedData" \
-              SYMROOT="$PWD/build/Products" \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGNING_ALLOWED=YES \
               CODE_SIGN_IDENTITY="-" \
@@ -412,7 +424,7 @@ jobs:
           echo "IPA verification passed."
 
       - name: Upload unsigned IPA (LocusPlus-unsigned)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.1
         with:
           name: LocusPlus-unsigned
           path: LocusPlus-unsigned.ipa
@@ -420,7 +432,7 @@ jobs:
           retention-days: 30
 
       - name: Upload unsigned IPA (Locus-unsigned)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.1
         with:
           name: Locus-unsigned
           path: Locus-unsigned.ipa
@@ -429,7 +441,7 @@ jobs:
 
       - name: Upload build logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.1
         with:
           name: build-logs
           path: build.log

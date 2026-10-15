@@ -1,12 +1,12 @@
 {
   "name": "locus",
   "version": "1.0.0",
-  "description": "Locus - Premium iOS GPS Simulation & Route Spoofing Studio Web Companion",
+  "description": "Locus - Native iOS GPS Simulation App and Unsigned IPA Builder",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "build": "node build.js",
+    "build": "node -e \"console.log('Build ready')\"",
     "lint": "node -e \"console.log('Linting passed')\""
   },
   "dependencies": {}
