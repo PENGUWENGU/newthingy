@@ -52,6 +52,14 @@ else
     echo "❌ $WORKFLOW is missing concurrency configuration"
     ERRORS=$((ERRORS + 1))
   fi
+  # Verify exactly one unsigned IPA artifact is uploaded
+  IPA_UPLOADS=$(grep -c "path:.*\.ipa" "$WORKFLOW" || true)
+  if [ "$IPA_UPLOADS" -ne 1 ]; then
+    echo "❌ $WORKFLOW must upload exactly 1 unsigned IPA artifact (found $IPA_UPLOADS)"
+    ERRORS=$((ERRORS + 1))
+  else
+    echo "✅ Exactly 1 unsigned IPA artifact configured in $WORKFLOW"
+  fi
   echo "✅ $WORKFLOW conforms to modern CI standards"
 fi
 

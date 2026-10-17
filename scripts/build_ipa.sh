@@ -290,23 +290,21 @@ if [ ! -f "$STAGED_EXEC" ] || [ ! -s "$STAGED_EXEC" ]; then
 fi
 chmod +x "$STAGED_EXEC"
 
-IPA_NAME_PRIMARY="LocusPlus-unsigned.ipa"
-IPA_NAME_SECONDARY="Locus-unsigned.ipa"
+IPA_NAME="LocusPlus-unsigned.ipa"
 
-rm -f "$ROOT_DIR/$IPA_NAME_PRIMARY" "$ROOT_DIR/$IPA_NAME_SECONDARY"
-echo "Creating $IPA_NAME_PRIMARY..."
-/usr/bin/zip -qry "$ROOT_DIR/$IPA_NAME_PRIMARY" Payload
-cp "$ROOT_DIR/$IPA_NAME_PRIMARY" "$ROOT_DIR/$IPA_NAME_SECONDARY"
+rm -f "$ROOT_DIR/$IPA_NAME" "$ROOT_DIR/Locus-unsigned.ipa"
+echo "Creating $IPA_NAME..."
+/usr/bin/zip -qry "$ROOT_DIR/$IPA_NAME" Payload
 
 # ------------------------------------------------------------------------------
 # 9. Strict Verification of IPA Archive Contents
 # ------------------------------------------------------------------------------
 echo "--- 8. Strict Verification of IPA Contents ---"
-/usr/bin/unzip -t "$ROOT_DIR/$IPA_NAME_PRIMARY" >/dev/null
+/usr/bin/unzip -t "$ROOT_DIR/$IPA_NAME" >/dev/null
 echo "Archive integrity: OK"
 
 # Check presence of main binary inside zip
-ZIP_CONTENTS=$(/usr/bin/unzip -l "$ROOT_DIR/$IPA_NAME_PRIMARY")
+ZIP_CONTENTS=$(/usr/bin/unzip -l "$ROOT_DIR/$IPA_NAME")
 if ! echo "$ZIP_CONTENTS" | grep -q "Payload/Locus.app/$EXEC_NAME"; then
   echo "ERROR: Critical packaging failure: executable binary '$EXEC_NAME' NOT found in IPA!" >&2
   exit 1
@@ -317,8 +315,7 @@ if ! echo "$ZIP_CONTENTS" | grep -q "Payload/Locus.app/Info.plist"; then
 fi
 
 echo "=================================================="
-echo "🎉 SUCCESS: IPA BUILT & VERIFIED SUCCESSFULLY!"
-echo "Primary IPA: $ROOT_DIR/$IPA_NAME_PRIMARY ($(du -h "$ROOT_DIR/$IPA_NAME_PRIMARY" | cut -f1))"
-echo "Secondary IPA: $ROOT_DIR/$IPA_NAME_SECONDARY ($(du -h "$ROOT_DIR/$IPA_NAME_SECONDARY" | cut -f1))"
+echo "🎉 SUCCESS: SINGLE UNSIGNED IPA BUILT & VERIFIED!"
+echo "IPA file: $ROOT_DIR/$IPA_NAME ($(du -h "$ROOT_DIR/$IPA_NAME" | cut -f1))"
 echo "Executable: Payload/Locus.app/$EXEC_NAME (verified inside IPA)"
 echo "=================================================="

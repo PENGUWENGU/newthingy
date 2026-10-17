@@ -164,14 +164,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload unsigned IPA (Locus-unsigned)
-        uses: actions/upload-artifact@v4.6.1
-        with:
-          name: Locus-unsigned
-          path: Locus-unsigned.ipa
-          if-no-files-found: ignore
-          retention-days: 30
-
       - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4.6.1
