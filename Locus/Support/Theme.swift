@@ -313,7 +313,13 @@ struct LocusGlassModifier<S: Shape>: ViewModifier {
         } else if appearance == .glass {
             content
                 .background {
-                    shape.fill(style == .clear ? .ultraThinMaterial.opacity(0.6) : .ultraThinMaterial)
+                    Group {
+                        if style == .clear {
+                            shape.fill(.ultraThinMaterial).opacity(0.6)
+                        } else {
+                            shape.fill(.ultraThinMaterial)
+                        }
+                    }
                     if let effectiveTint {
                         shape.fill(effectiveTint.opacity(0.35))
                     } else {
@@ -325,7 +331,13 @@ struct LocusGlassModifier<S: Shape>: ViewModifier {
         } else {
             content
                 .background {
-                    shape.fill(appearance == .minimal ? .thinMaterial : .ultraThinMaterial)
+                    Group {
+                        if appearance == .minimal {
+                            shape.fill(.thinMaterial)
+                        } else {
+                            shape.fill(.ultraThinMaterial)
+                        }
+                    }
                     if let effectiveTint {
                         shape.fill(effectiveTint.opacity(0.40))
                     }

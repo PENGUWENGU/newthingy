@@ -190,15 +190,15 @@ if xcodebuild \
   BUILD_SUCCESS=1
 fi
 
-# Fallback: if scheme build had any issue, retry target 'Locus' directly
+# Fallback: if initial build had any issue, retry clean build with scheme 'Locus'
 TARGET_CANDIDATE="$DERIVED_DATA/Build/Products/${CONFIG}-iphoneos/Locus.app"
 if ! validate_app_bundle "$TARGET_CANDIDATE"; then
   echo "Target check: validating fallback builds..."
   if [ "$BUILD_SUCCESS" -ne 1 ]; then
-    echo "Retrying directly with -target Locus..."
+    echo "Retrying with clean build for scheme 'Locus'..."
     if xcodebuild \
       -project Locus.xcodeproj \
-      -target Locus \
+      -scheme Locus \
       -configuration "$CONFIG" \
       -sdk iphoneos \
       -destination 'generic/platform=iOS' \
@@ -213,7 +213,7 @@ if ! validate_app_bundle "$TARGET_CANDIDATE"; then
       PROVISIONING_PROFILE_SPECIFIER="" \
       CODE_SIGN_ENTITLEMENTS="" \
       COMPILER_INDEX_STORE_ENABLE=NO \
-      build 2>&1 | tee -a "$ROOT_DIR/build.log"; then
+      clean build 2>&1 | tee -a "$ROOT_DIR/build.log"; then
       BUILD_SUCCESS=1
     fi
   fi
