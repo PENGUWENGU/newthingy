@@ -19,6 +19,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -32,54 +36,53 @@ jobs:
         with:
           lfs: false
           submodules: recursive
+          fetch-depth: 1
 
-      - name: Fetch Git LFS files
-        shell: bash
-        run: |
-          touch build.log
-          git lfs pull || true
+      - name: Cache libidevice_ffi.a
+        id: cache-idevice
+        uses: actions/cache@v4.2.2
+        with:
+          path: Vendor/idevice/libidevice_ffi.a
+          key: libidevice-ffi-v1-${{ hashFiles('Vendor/idevice/idevice.h') }}
+          restore-keys: |
+            libidevice-ffi-v1-
 
       - name: Ensure libidevice_ffi.a is present
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p Vendor/idevice
+          IDEVICE_A="Vendor/idevice/libidevice_ffi.a"
           
-          # Check if already present and is a valid binary archive (> 10MB, actual is ~91MB)
-          if [ -f "Vendor/idevice/libidevice_ffi.a" ]; then
-            FILE_SIZE=$(wc -c < "Vendor/idevice/libidevice_ffi.a" | tr -d ' ')
+          if [ -f "$IDEVICE_A" ]; then
+            FILE_SIZE=$(wc -c < "$IDEVICE_A" | tr -d ' ')
             if [ "$FILE_SIZE" -gt 10000000 ]; then
-              echo "libidevice_ffi.a is already present and valid (${FILE_SIZE} bytes)."
+              echo "libidevice_ffi.a is cached and valid (${FILE_SIZE} bytes)."
               exit 0
             fi
             echo "libidevice_ffi.a is only ${FILE_SIZE} bytes (likely a pointer or truncated file); re-downloading..."
-            rm -f "Vendor/idevice/libidevice_ffi.a"
+            rm -f "$IDEVICE_A"
           fi
 
           echo "Downloading precompiled libidevice_ffi.a..."
-          CURRENT_REPO="${{ github.repository }}"
-          CURRENT_REF="${{ github.ref_name }}"
-          
           DOWNLOADED=0
           URLS=(
             "https://raw.githubusercontent.com/ChrisMack32/Locus/main/Vendor/idevice/libidevice_ffi.a"
             "https://github.com/ChrisMack32/Locus/raw/main/Vendor/idevice/libidevice_ffi.a"
-            "https://raw.githubusercontent.com/${CURRENT_REPO}/${CURRENT_REF}/Vendor/idevice/libidevice_ffi.a"
-            "https://raw.githubusercontent.com/${CURRENT_REPO}/main/Vendor/idevice/libidevice_ffi.a"
-            "https://github.com/${CURRENT_REPO}/raw/main/Vendor/idevice/libidevice_ffi.a"
+            "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/Vendor/idevice/libidevice_ffi.a"
           )
           
           for url in "${URLS[@]}"; do
             echo "Trying URL: $url"
-            if curl -sSL -f --retry 3 --retry-delay 2 --connect-timeout 20 "$url" -o Vendor/idevice/libidevice_ffi.a; then
-              FILE_SIZE=$(wc -c < "Vendor/idevice/libidevice_ffi.a" | tr -d ' ')
+            if curl -sSL -f --retry 3 --retry-delay 2 --connect-timeout 20 "$url" -o "$IDEVICE_A"; then
+              FILE_SIZE=$(wc -c < "$IDEVICE_A" | tr -d ' ')
               if [ "$FILE_SIZE" -gt 10000000 ]; then
                 echo "Successfully downloaded libidevice_ffi.a (${FILE_SIZE} bytes)."
                 DOWNLOADED=1
                 break
               fi
             fi
-            rm -f "Vendor/idevice/libidevice_ffi.a"
+            rm -f "$IDEVICE_A"
           done
           
           if [ "$DOWNLOADED" -ne 1 ]; then
@@ -91,361 +94,59 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Installed Xcode versions:"
-          ls -1 /Applications | grep -E '^Xcode.*\.app$' || true
-          
           SELECTED=""
-          for xcode_path in $(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V -r); do
+          for xcode_path in /Applications/Xcode_16*.app /Applications/Xcode_15*.app /Applications/Xcode*.app; do
             if [ -d "$xcode_path/Contents/Developer" ]; then
               SELECTED="$xcode_path"
               break
             fi
           done
           
-          if [ -z "$SELECTED" ]; then
-            for xcode_path in $(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V -r); do
-              if [ -d "$xcode_path/Contents/Developer" ]; then
-                SELECTED="$xcode_path"
-                break
-              fi
-            done
-          fi
-          
           if [ -n "$SELECTED" ]; then
             echo "Switching to $SELECTED"
             sudo xcode-select -s "$SELECTED"
             echo "DEVELOPER_DIR=$SELECTED/Contents/Developer" >> "$GITHUB_ENV"
-            export DEVELOPER_DIR="$SELECTED/Contents/Developer"
           fi
           
           echo "Selected Xcode:"
           xcodebuild -version
-          echo
-          echo "iPhoneOS SDKs:"
           xcodebuild -showsdks | grep -i iphoneos || true
 
-      - name: Install XcodeGen
+      - name: Fast Install XcodeGen
         shell: bash
         run: |
           set -euo pipefail
           if ! command -v xcodegen >/dev/null 2>&1; then
+            echo "Installing precompiled XcodeGen..."
+            mkdir -p /tmp/xcodegen_dl
+            if curl -sSL -f --connect-timeout 15 --retry 2 "https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip" -o /tmp/xcodegen_dl/xcodegen.zip; then
+              unzip -qo /tmp/xcodegen_dl/xcodegen.zip -d /tmp/xcodegen_dl
+              sudo cp /tmp/xcodegen_dl/xcodegen/bin/xcodegen /usr/local/bin/ || true
+              rm -rf /tmp/xcodegen_dl
+            fi
+          fi
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            echo "Fallback to brew install..."
             HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install xcodegen
           fi
           xcodegen version
 
-      - name: Generate Xcode project
+      - name: Build and Package Unsigned IPA
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf Locus.xcodeproj
-          xcodegen generate --spec project.yml
-          test -d Locus.xcodeproj
+          chmod +x scripts/build_ipa.sh
+          bash scripts/build_ipa.sh "${{ inputs.configuration || 'Release' }}"
 
-      - name: Show build configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Schemes:"
-          xcodebuild -project Locus.xcodeproj -list
-          echo
-          echo "Project deployment target:"
-          grep -n 'deploymentTarget\|IPHONEOS_DEPLOYMENT_TARGET\|xcodeVersion' project.yml || true
-
-      - name: Clean build
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf build
-          mkdir -p build
-
-      - name: Build unsigned iOS app
-        shell: bash
-        run: |
-          set -o pipefail
-          CONFIG="${{ inputs.configuration || 'Release' }}"
-          echo "Building Locus configuration: $CONFIG"
-          
-          # Clean any previous build artifacts
-          rm -rf build/DerivedData build/Products build/Locus.xcarchive
-          mkdir -p build/DerivedData build/Products
-
-          validate_candidate_app() {
-            local target_dir="$1"
-            if [ -z "$target_dir" ] || [ ! -d "$target_dir" ]; then
-              return 1
-            fi
-            if [ ! -f "$target_dir/Info.plist" ]; then
-              return 1
-            fi
-            local exec_name
-            exec_name=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$target_dir/Info.plist" 2>/dev/null || echo "Locus")
-            [ -z "$exec_name" ] && exec_name="Locus"
-            if [ ! -f "$target_dir/$exec_name" ] || [ ! -s "$target_dir/$exec_name" ]; then
-              return 1
-            fi
-            return 0
-          }
-
-          execute_build() {
-            local attempt_name="$1"
-            echo "--- Executing direct build: $attempt_name ---"
-            local STATUS=0
-            xcodebuild \
-              -project Locus.xcodeproj \
-              -scheme Locus \
-              -configuration "$CONFIG" \
-              -sdk iphoneos \
-              -destination 'generic/platform=iOS' \
-              -derivedDataPath "$PWD/build/DerivedData" \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=YES \
-              CODE_SIGN_IDENTITY="-" \
-              AD_HOC_CODE_SIGNING_ALLOWED=YES \
-              CODE_SIGN_STYLE=Manual \
-              DEVELOPMENT_TEAM="" \
-              PROVISIONING_PROFILE_SPECIFIER="" \
-              CODE_SIGN_ENTITLEMENTS="" \
-              COMPILER_INDEX_STORE_ENABLE=NO \
-              build 2>&1 | tee -a build.log || STATUS=${PIPESTATUS[0]}
-
-            local APP_CANDIDATE="$PWD/build/DerivedData/Build/Products/${CONFIG}-iphoneos/Locus.app"
-            if validate_candidate_app "$APP_CANDIDATE"; then
-              echo "Build succeeded: valid Locus.app produced at $APP_CANDIDATE"
-              return 0
-            fi
-
-            # Check if anywhere in DerivedData has a valid Locus.app with binary
-            for candidate in $(find "$PWD/build/DerivedData/Build/Products" -name "Locus.app" -type d 2>/dev/null); do
-              if validate_candidate_app "$candidate"; then
-                echo "Build succeeded: valid Locus.app found at $candidate"
-                return 0
-              fi
-            done
-
-            echo "Build did not produce a valid Locus.app with executable binary (exit code $STATUS)."
-            return 1
-          }
-
-          BUILD_SUCCESS=0
-          if execute_build "Standard Build"; then
-            BUILD_SUCCESS=1
-          fi
-
-          # If first attempt failed and LocusWidgets target exists, strip extension and retry standalone
-          if [ "$BUILD_SUCCESS" -ne 1 ] && grep -q "LocusWidgets:" project.yml 2>/dev/null; then
-            echo "Notice: Retrying build with standalone Locus app (removing widget extension target)..."
-            node -e '
-              const fs = require("fs");
-              let content = fs.readFileSync("project.yml", "utf8");
-              const lines = content.split("\n");
-              const filtered = [];
-              let skipping = false;
-              for (const line of lines) {
-                if (/^  LocusWidgets:/.test(line)) {
-                  skipping = true;
-                  continue;
-                }
-                if (skipping && /^[a-zA-Z0-9_]/.test(line)) {
-                  skipping = false;
-                } else if (skipping && /^  [a-zA-Z0-9_]/.test(line)) {
-                  skipping = false;
-                }
-                if (!skipping) {
-                  filtered.push(line);
-                }
-              }
-              fs.writeFileSync("project.yml", filtered.join("\n"));
-            '
-            rm -rf Locus.xcodeproj build/DerivedData
-            mkdir -p build/DerivedData
-            xcodegen generate --spec project.yml
-            
-            if execute_build "Standalone App Retry"; then
-              BUILD_SUCCESS=1
-            fi
-          fi
-
-          if [ "$BUILD_SUCCESS" -ne 1 ]; then
-            echo "::group::❌ Compilation Errors & Diagnostics"
-            echo "=========================================="
-            echo "       BUILD FAILED - ERROR SUMMARY       "
-            echo "=========================================="
-            grep -E 'error: ' build.log | while IFS= read -r line; do
-              echo "$line"
-              if [[ "$line" =~ ^([^:]+):([0-9]+):([0-9]+):\ error:\ (.*)$ ]]; then
-                FILE="${BASH_REMATCH[1]}"
-                LINE="${BASH_REMATCH[2]}"
-                COL="${BASH_REMATCH[3]}"
-                MSG="${BASH_REMATCH[4]}"
-                echo "::error file=$FILE,line=$LINE,col=$COL::$MSG"
-              fi
-            done
-            echo "=========================================="
-            echo "Last 80 lines of build.log:"
-            tail -n 80 build.log
-            echo "::endgroup::"
-            exit 1
-          fi
-
-          # Optional: compile and embed LocusWidgets extension if present in project and standalone app succeeded
-          if grep -q "LocusWidgets:" project.yml 2>/dev/null; then
-            echo "Attempting optional LocusWidgets extension build..."
-            if xcodebuild \
-              -project Locus.xcodeproj \
-              -target LocusWidgets \
-              -configuration "$CONFIG" \
-              -sdk iphoneos \
-              -destination 'generic/platform=iOS' \
-              -derivedDataPath "$PWD/build/DerivedData" \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=YES \
-              CODE_SIGN_IDENTITY="-" \
-              AD_HOC_CODE_SIGNING_ALLOWED=YES \
-              CODE_SIGN_STYLE=Manual \
-              DEVELOPMENT_TEAM="" \
-              PROVISIONING_PROFILE_SPECIFIER="" \
-              CODE_SIGN_ENTITLEMENTS="" \
-              COMPILER_INDEX_STORE_ENABLE=NO \
-              build >> build.log 2>&1; then
-              APPEX=$(find "$PWD/build" -name "LocusWidgets.appex" -type d 2>/dev/null | head -n 1)
-              APP=$(find "$PWD/build" -name "Locus.app" -type d 2>/dev/null | head -n 1)
-              if [ -n "$APPEX" ] && [ -n "$APP" ] && [ -f "$APPEX/LocusWidgets" ]; then
-                mkdir -p "$APP/PlugIns"
-                cp -R "$APPEX" "$APP/PlugIns/LocusWidgets.appex"
-                echo "Successfully embedded LocusWidgets.appex into Locus.app/PlugIns."
-              fi
-            else
-              echo "Notice: Skipping optional LocusWidgets.appex embedding; standalone Locus.app built cleanly."
-            fi
-          fi
-
-      - name: Locate and validate built app
-        shell: bash
-        run: |
-          set -euo pipefail
-          CONFIG="${{ inputs.configuration || 'Release' }}"
-          APP=""
-          
-          CANDIDATES=(
-            "$PWD/build/DerivedData/Build/Products/${CONFIG}-iphoneos/Locus.app"
-            "$PWD/build/DerivedData/Build/Products/Release-iphoneos/Locus.app"
-            "$PWD/build/DerivedData/Build/Products/Debug-iphoneos/Locus.app"
-            "$PWD/build/Products/Locus.app"
-          )
-          
-          for candidate in "${CANDIDATES[@]}"; do
-            if [ -d "$candidate" ] && [ -f "$candidate/Info.plist" ]; then
-              EXEC_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$candidate/Info.plist" 2>/dev/null || echo "Locus")
-              [ -z "$EXEC_NAME" ] && EXEC_NAME="Locus"
-              if [ -f "$candidate/$EXEC_NAME" ] && [ -s "$candidate/$EXEC_NAME" ]; then
-                APP="$candidate"
-                echo "Discovered validated app at: $APP"
-                break
-              fi
-            fi
-          done
-
-          # Fallback search if not at expected candidate path
-          if [ -z "$APP" ]; then
-            for candidate in $(find "$PWD/build" -name "Locus.app" -type d 2>/dev/null); do
-              if [ -f "$candidate/Info.plist" ]; then
-                EXEC_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$candidate/Info.plist" 2>/dev/null || echo "Locus")
-                [ -z "$EXEC_NAME" ] && EXEC_NAME="Locus"
-                if [ -f "$candidate/$EXEC_NAME" ] && [ -s "$candidate/$EXEC_NAME" ]; then
-                  APP="$candidate"
-                  echo "Found valid Locus.app with binary via search at: $APP"
-                  break
-                fi
-              fi
-            done
-          fi
-
-          if [ -z "$APP" ]; then
-            echo "::error::Locus.app was not produced with a valid executable binary."
-            echo
-            echo "Contents of build directory:"
-            find "$PWD/build" -maxdepth 6 2>/dev/null || true
-            exit 1
-          fi
-
-          # Prepare clean staging app directory
-          mkdir -p "$PWD/build/StagedApp"
-          rm -rf "$PWD/build/StagedApp/Locus.app"
-          cp -a "$APP" "$PWD/build/StagedApp/Locus.app"
-          STAGED="$PWD/build/StagedApp/Locus.app"
-
-          # Confirm executable binary is present and executable
-          EXEC_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$STAGED/Info.plist" 2>/dev/null || echo "Locus")
-          [ -z "$EXEC_NAME" ] && EXEC_NAME="Locus"
-          if [ ! -f "$STAGED/$EXEC_NAME" ] || [ ! -s "$STAGED/$EXEC_NAME" ]; then
-            echo "::error::Executable binary '$EXEC_NAME' is missing or 0 bytes in staged bundle!"
-            exit 1
-          fi
-          chmod +x "$STAGED/$EXEC_NAME"
-
-          echo "APP_PATH=$STAGED" >> "$GITHUB_ENV"
-          echo "EXEC_NAME=$EXEC_NAME" >> "$GITHUB_ENV"
-          echo "Staged verified app bundle at: $STAGED"
-          echo "Executable binary ($EXEC_NAME):"
-          ls -lh "$STAGED/$EXEC_NAME"
-          file "$STAGED/$EXEC_NAME"
-          du -sh "$STAGED"
-
-      - name: Verify app code signing
-        shell: bash
-        run: |
-          set -euo pipefail
-          APP="${APP_PATH}"
-          echo "Checking code signature for $APP..."
-          SIG_INFO=$(codesign -dvv "$APP" 2>&1 || true)
-          echo "$SIG_INFO"
-          if echo "$SIG_INFO" | grep -q "Authority="; then
-            echo "::error::The application is signed with a certificate authority."
-            exit 1
-          fi
-          echo "Verified: No signing authority found (ad-hoc / unsigned, ready for sideloading)."
-
-      - name: Create IPA
-        shell: bash
-        run: |
-          set -euo pipefail
-          APP="${APP_PATH}"
-          EXEC="${EXEC_NAME:-Locus}"
-          
-          rm -rf Payload
-          mkdir -p Payload
-          cp -a "$APP" Payload/Locus.app
-          
-          # Strictly guarantee the executable exists in Payload/Locus.app
-          if [ ! -f "Payload/Locus.app/$EXEC" ] || [ ! -s "Payload/Locus.app/$EXEC" ]; then
-            echo "::error::Main app executable Payload/Locus.app/$EXEC is missing or empty!"
-            exit 1
-          fi
-          chmod +x "Payload/Locus.app/$EXEC"
-          
-          echo "Payload contents:"
-          ls -la Payload/Locus.app
-          echo "Binary details:"
-          ls -lh "Payload/Locus.app/$EXEC"
-          file "Payload/Locus.app/$EXEC"
-          
-          rm -f LocusPlus-unsigned.ipa Locus-unsigned.ipa
-          /usr/bin/zip -qry LocusPlus-unsigned.ipa Payload
-          cp LocusPlus-unsigned.ipa Locus-unsigned.ipa
-          test -f LocusPlus-unsigned.ipa
-          
-          echo "IPA created successfully:"
-          ls -lh LocusPlus-unsigned.ipa Locus-unsigned.ipa
-
-      - name: Verify IPA contents
+      - name: Verify IPA contents and Mach-O executable
         shell: bash
         run: |
           set -euo pipefail
           echo "=== Testing IPA archive integrity ==="
           /usr/bin/unzip -t LocusPlus-unsigned.ipa
           
-          echo "=== Checking critical app files inside IPA ==="
-          /usr/bin/unzip -l LocusPlus-unsigned.ipa | grep -E 'Payload/Locus\.app/(Info\.plist|Locus$|PkgInfo|Assets\.car)' || true
+          echo "=== Inspecting IPA Contents ==="
+          /usr/bin/unzip -l LocusPlus-unsigned.ipa | grep -E 'Payload/Locus\.app/(Info\.plist|Locus$|PkgInfo)' || true
           
           # Strictly verify that the main executable binary is packaged inside the IPA
           if ! /usr/bin/unzip -l LocusPlus-unsigned.ipa | grep -q "Payload/Locus.app/Locus"; then
@@ -453,10 +154,6 @@ jobs:
             exit 1
           fi
           
-          echo
-          echo "=== IPA Table of Contents (Summary) ==="
-          /usr/bin/unzip -l LocusPlus-unsigned.ipa | head -n 45
-          echo
           echo "Verified: Main app binary and resources are properly packaged in the IPA."
 
       - name: Upload unsigned IPA (LocusPlus-unsigned)

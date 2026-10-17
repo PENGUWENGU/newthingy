@@ -6,8 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "build": "node -e \"console.log('Build ready')\"",
-    "lint": "node -e \"console.log('Linting passed')\""
+    "build": "bash scripts/verify_workflow.sh",
+    "lint": "bash scripts/verify_workflow.sh",
+    "test": "bash scripts/verify_workflow.sh"
   },
   "dependencies": {}
 }
