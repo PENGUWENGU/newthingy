@@ -82,6 +82,16 @@ if [ ! -f "Vendor/idevice/idevice.h" ]; then
   ERRORS=$((ERRORS + 1))
 fi
 
+# 5. Verify Swift source code sanity checks (preventing build breakages)
+if grep -rn "glassEffect" Locus/ >/dev/null 2>&1; then
+  echo "❌ Detected uncompilable glassEffect API call in Locus/"
+  ERRORS=$((ERRORS + 1))
+fi
+if grep -rn "setTravelMode(" Locus/ >/dev/null 2>&1 && ! grep -rn "func setTravelMode(" Locus/ >/dev/null 2>&1; then
+  echo "❌ Detected setTravelMode call without method definition"
+  ERRORS=$((ERRORS + 1))
+fi
+
 if [ "$ERRORS" -gt 0 ]; then
   echo "❌ Integrity check failed with $ERRORS error(s)."
   exit 1

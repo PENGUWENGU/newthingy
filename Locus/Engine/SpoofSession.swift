@@ -378,6 +378,19 @@ final class SpoofSession: ObservableObject {
         objectWillChange.send()
     }
 
+    /// Sets the active travel mode (compatibility alias for selectTravelMode).
+    func setTravelMode(_ mode: TravelMode) {
+        selectTravelMode(mode)
+    }
+
+    /// Sets a custom speed override in meters per second directly (nil clears custom speed override).
+    func setCustomSpeed(_ mps: Double?) {
+        customSpeedMPS = mps
+        SpeedPreference.setCustomSpeed(mps)
+        updateRemainingRouteDuration()
+        objectWillChange.send()
+    }
+
     /// Sets the user's preferred speed unit (mph, km/h, m/s).
     func setSpeedUnit(_ unit: SpeedUnit) {
         speedUnit = unit

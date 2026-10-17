@@ -89,12 +89,18 @@ struct RouteWaypoint: Identifiable, Equatable, Hashable {
         id: UUID = UUID(),
         coordinate: CLLocationCoordinate2D,
         name: String = "",
+        title: String? = nil,
         stopDuration: TimeInterval = 0
     ) {
         self.id = id
         self.coordinate = coordinate
-        self.name = name
+        self.name = title ?? (name.isEmpty ? "" : name)
         self.stopDuration = stopDuration
+    }
+
+    var title: String {
+        get { name }
+        set { name = newValue }
     }
 
     var isStop: Bool {

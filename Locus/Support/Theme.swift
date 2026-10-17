@@ -289,7 +289,7 @@ enum LocusGlassStyle {
     case interactive
 }
 
-/// Liquid Glass on iOS 26+; material fallback earlier.
+/// Liquid Glass material styling for panels and controls.
 struct LocusGlassModifier<S: Shape>: ViewModifier {
     var style: LocusGlassStyle
     var shape: S
@@ -310,9 +310,17 @@ struct LocusGlassModifier<S: Shape>: ViewModifier {
                 }
                 .overlay(shape.stroke(LocusTheme.panelStroke, lineWidth: 1.5))
                 .contentShape(shape)
-        } else if #available(iOS 26.0, *), appearance == .glass {
+        } else if appearance == .glass {
             content
-                .glassEffect(glass(with: effectiveTint), in: shape)
+                .background {
+                    shape.fill(style == .clear ? .ultraThinMaterial.opacity(0.6) : .ultraThinMaterial)
+                    if let effectiveTint {
+                        shape.fill(effectiveTint.opacity(0.35))
+                    } else {
+                        shape.fill(Color.white.opacity(0.06))
+                    }
+                }
+                .overlay(shape.stroke(LocusTheme.panelStroke.opacity(0.8), lineWidth: 1))
                 .contentShape(shape)
         } else {
             content
@@ -325,14 +333,6 @@ struct LocusGlassModifier<S: Shape>: ViewModifier {
                 .overlay(shape.stroke(LocusTheme.panelStroke, lineWidth: 1))
                 .contentShape(shape)
         }
-    }
-
-    @available(iOS 26.0, *)
-    private func glass(with tintColor: Color?) -> Glass {
-        var g: Glass = style == .clear ? .clear : .regular
-        if style == .interactive { g = g.interactive() }
-        if let tintColor { g = g.tint(tintColor) }
-        return g
     }
 }
 
