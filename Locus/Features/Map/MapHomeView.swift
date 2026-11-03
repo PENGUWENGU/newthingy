@@ -600,12 +600,18 @@ struct MapHomeView: View {
 
     private var topChrome: some View {
         VStack(spacing: 8) {
+            CrashRecoveryBannerView(session: session, pairing: pairing)
+
             StatusBarView()
 
             searchBar
 
             if !searchText.isEmpty && !search.results.isEmpty {
                 searchResults
+            }
+
+            if session.isFollowingRoute || session.isSpoofing {
+                SpeedLimitBadgeView(session: session)
             }
 
             // Route Mode Active Floating Bar

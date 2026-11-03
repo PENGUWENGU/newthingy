@@ -86,7 +86,7 @@ final class PairingStore: ObservableObject {
         hasPairingFile = false
     }
 
-    private func installPairingData(_ data: Data) throws {
+    func installPairingData(_ data: Data) throws {
         guard looksLikePairingPlist(data) else {
             throw PairingImportError.invalidContents
         }

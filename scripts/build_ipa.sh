@@ -265,13 +265,15 @@ ls -lh "$FOUND_APP/$EXEC_NAME"
 file "$FOUND_APP/$EXEC_NAME" || true
 
 # ------------------------------------------------------------------------------
-# 7. Embed optional widget extension if built
+# 7. Embed Live Activities widget extension
 # ------------------------------------------------------------------------------
-WIDGET_APPEX=$(find "$BUILD_DIR" -name "LocusWidgets.appex" -type d 2>/dev/null | head -n 1)
-if [ -n "$WIDGET_APPEX" ] && [ -f "$WIDGET_APPEX/LocusWidgets" ]; then
-  echo "Embedding LocusWidgets.appex into Locus.app/PlugIns..."
+WIDGET_APPEX=$(find "$DERIVED_DATA" "$BUILD_DIR" -name "LocusWidgets.appex" -type d 2>/dev/null | head -n 1)
+if [ -n "$WIDGET_APPEX" ]; then
+  echo "Found Live Activities extension at: $WIDGET_APPEX"
   mkdir -p "$FOUND_APP/PlugIns"
+  rm -rf "$FOUND_APP/PlugIns/LocusWidgets.appex"
   cp -a "$WIDGET_APPEX" "$FOUND_APP/PlugIns/LocusWidgets.appex"
+  echo "Successfully embedded Live Activities widget extension into Locus.app/PlugIns/"
 fi
 
 # ------------------------------------------------------------------------------

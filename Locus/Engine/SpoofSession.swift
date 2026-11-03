@@ -126,6 +126,8 @@ final class SpoofSession: ObservableObject {
     @Published var speedVarianceMPH: Double = SpeedPreference.storedVariance
     @Published var speedRandomnessEnabled: Bool = SpeedPreference.storedRandomnessEnabled
     @Published var liveCourseDegrees: Double = 0.0
+    @Published var adhereToSpeedLimits: Bool = false
+    @Published var currentSpeedLimitInfo: RoadSpeedInfo? = nil
 
     var primaryAccentColor: Color {
         accentTheme == .custom ? (Color(hex: customPrimaryHex) ?? accentTheme.primaryColor) : accentTheme.primaryColor
@@ -459,12 +461,58 @@ final class SpoofSession: ObservableObject {
         apply(coordinate, pairing: pairing, markRecent: true)
     }
 
+    /// Resumes an interrupted spoofing session or route following a crash or unexpected termination.
+    func resumeFromCrash(snapshot: SpoofSessionSnapshot, pairing: PairingStore) {
+        guard pairing.hasPairingFile else {
+            lastError = "Import an RPPairing file in Settings first."
+            return
+        }
+
+        if let mode = TravelMode(rawValue: snapshot.travelModeRaw) {
+            travelMode = mode
+        }
+        if snapshot.currentSpeedMPS > 0 {
+            setCustomSpeed(snapshot.currentSpeedMPS)
+        }
+
+        if snapshot.sessionType == .route,
+           let coords = snapshot.routeCoordinates?.map({ $0.clCoordinate }),
+           coords.count >= 2 {
+            let segIdx = min(coords.count - 1, max(0, snapshot.currentSegmentIndex ?? 0))
+            let resumeCoord = snapshot.lastCoordinate.clCoordinate
+
+            var remainingCoords: [CLLocationCoordinate2D] = [resumeCoord]
+            if segIdx + 1 < coords.count {
+                remainingCoords.append(contentsOf: coords[(segIdx + 1)...])
+            } else if let last = coords.last, (abs(last.latitude - resumeCoord.latitude) > 0.00001 || abs(last.longitude - resumeCoord.longitude) > 0.00001) {
+                remainingCoords.append(last)
+            } else {
+                remainingCoords.append(coords[segIdx])
+            }
+
+            let waypoints: [RouteWaypoint] = (snapshot.routeWaypoints ?? []).map {
+                RouteWaypoint(id: $0.id, coordinate: $0.coordinate.clCoordinate, name: $0.name, stopDuration: $0.stopDuration)
+            }
+
+            followRoute(
+                remainingCoords,
+                waypoints: waypoints,
+                destinationName: snapshot.routeName ?? "Resumed Route",
+                pairing: pairing,
+                loop: snapshot.isLoop ?? false
+            )
+        } else {
+            teleport(to: snapshot.lastCoordinate.clCoordinate, pairing: pairing)
+        }
+    }
+
     func stop(pairing: PairingStore) {
         stopRoute()
         stopJoystick()
         stopResend()
         stopHealth()
         LiveActivityManager.shared.endAllActivities()
+        CrashRecoveryManager.shared.clearSession()
         isBusy = true
         let result = LocationEngine.clear()
         isBusy = false
@@ -487,6 +535,7 @@ final class SpoofSession: ObservableObject {
     func stopRoute() {
         routeTask?.cancel()
         routeTask = nil
+        CrashRecoveryManager.shared.clearSession()
         isFollowingRoute = false
         isRoutePaused = false
         liveSpeedMPS = 0.0
@@ -789,8 +838,17 @@ final class SpoofSession: ObservableObject {
                         turnAngle = RouteSimulationEngine.turnAngleBetween(bearing1: segmentHeading, bearing2: nextHeading)
                     }
 
+                    // Speed profiling with road limit adherence & dynamic 1–5 mph variance
+                    let targetBaseSpeed: Double
+                    if self.adhereToSpeedLimits, let postedLimit = RoadSpeedLimitService.shared.currentRoadSpeed?.speedLimitMPS,
+                       (self.travelMode == .drive || self.travelMode == .motorcycle || self.isCarModeActive) {
+                        targetBaseSpeed = postedLimit
+                    } else {
+                        targetBaseSpeed = self.currentSpeedMPS
+                    }
+
                     let liveSpeed = self.simulationEngine.computeNextSpeed(
-                        baseSpeedMPS: self.currentSpeedMPS,
+                        baseSpeedMPS: targetBaseSpeed,
                         travelMode: self.travelMode,
                         turnAngleDegrees: turnAngle,
                         elapsedSeconds: actualElapsed
@@ -840,13 +898,49 @@ final class SpoofSession: ObservableObject {
                     let finalCoord = telemetry.coordinate
 
                     let remainingInCurSeg = max(0.0, segmentDistances[currentSegmentIndex] - distanceInCurrentSegment)
-                    let remainingDistance = remainingInCurSeg + suffixDistances[currentSegmentIndex + 1]
-                    let remainingTravel = RouteBuilder.estimatedDuration(distance: remainingDistance, speed: self.currentSpeedMPS)
+                    let nextSuffixIdx = currentSegmentIndex + 1
+                    let nextSuffixDist = (nextSuffixIdx < suffixDistances.count) ? suffixDistances[nextSuffixIdx] : 0.0
+                    let remainingDistance = remainingInCurSeg + nextSuffixDist
+                    let remainingTravel = RouteBuilder.estimatedDuration(distance: remainingDistance, speed: targetBaseSpeed)
                     let remainingStops = pendingStops.reduce(0) { $0 + $1.stopDuration }
 
-                    // Slices for animated polyline progress
-                    let completedSlice = Array(coordinates[0...currentSegmentIndex]) + [coord]
-                    let remainingSlice = [coord] + Array(coordinates[(currentSegmentIndex + 1)...])
+                    // Safe slices for animated polyline progress (prevents out-of-bounds crash at route end)
+                    let completedSlice: [CLLocationCoordinate2D]
+                    if currentSegmentIndex < coordinates.count {
+                        completedSlice = Array(coordinates[0...currentSegmentIndex]) + [coord]
+                    } else {
+                        completedSlice = coordinates + [coord]
+                    }
+
+                    let remainingSlice: [CLLocationCoordinate2D]
+                    if currentSegmentIndex + 1 < coordinates.count {
+                        remainingSlice = [coord] + Array(coordinates[(currentSegmentIndex + 1)...])
+                    } else {
+                        remainingSlice = [coord]
+                    }
+
+                    // Periodically fetch road speed limits for HUD & vehicle mode
+                    if (self.travelMode == .drive || self.travelMode == .motorcycle || self.isCarModeActive) {
+                        RoadSpeedLimitService.shared.fetchSpeedLimit(at: finalCoord)
+                    }
+
+                    // Continuous heartbeat checkpoint for crash recovery
+                    CrashRecoveryManager.shared.updateHeartbeat(
+                        snapshot: SpoofSessionSnapshot(
+                            sessionType: .route,
+                            coordinate: finalCoord,
+                            locationName: self.routeDestinationName,
+                            travelMode: self.travelMode,
+                            currentSpeedMPS: liveSpeed,
+                            routeName: self.routeDestinationName,
+                            routeCoordinates: coordinates,
+                            routeWaypoints: waypoints,
+                            currentSegmentIndex: currentSegmentIndex,
+                            routeProgress: min(1.0, max(0.0, 1.0 - (remainingDistance / max(1.0, totalRouteDistance)))),
+                            isLoop: loop,
+                            remainingDistanceMeters: remainingDistance
+                        )
+                    )
 
                     // Physical injection directly on background simulation thread for sub-millisecond precision
                     _ = LocationEngine.set(
@@ -861,6 +955,7 @@ final class SpoofSession: ObservableObject {
                         self.pin = finalCoord
                         self.liveSpeedMPS = telemetry.speedMPS
                         self.liveCourseDegrees = telemetry.courseDegrees
+                        self.currentSpeedLimitInfo = RoadSpeedLimitService.shared.currentRoadSpeed
                         self.routeProgress = min(1.0, max(0.0, 1.0 - (remainingDistance / max(1.0, totalRouteDistance))))
                         self.remainingRouteDistance = remainingDistance
                         self.remainingRouteDuration = remainingTravel + remainingStops
@@ -933,6 +1028,7 @@ final class SpoofSession: ObservableObject {
             }
 
             await MainActor.run {
+                CrashRecoveryManager.shared.clearSession()
                 self.isFollowingRoute = false
                 self.isRoutePaused = false
                 self.liveSpeedMPS = 0.0
@@ -1380,6 +1476,14 @@ final class SpoofSession: ObservableObject {
             if markRecent {
                 pushRecent(coordinate)
             }
+            RoadSpeedLimitService.shared.fetchSpeedLimit(at: coordinate)
+            CrashRecoveryManager.shared.updateHeartbeat(snapshot: SpoofSessionSnapshot(
+                sessionType: isFollowingRoute ? .route : (joystickActive ? .joystick : .teleport),
+                coordinate: coordinate,
+                locationName: Self.coordinateLabel(coordinate),
+                travelMode: travelMode,
+                currentSpeedMPS: currentSpeedMPS
+            ))
             if liveActivitiesEnabled && !isFollowingRoute {
                 LiveActivityManager.shared.startSpoofActivity(
                     locationName: Self.coordinateLabel(coordinate),

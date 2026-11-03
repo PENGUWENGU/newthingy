@@ -2,12 +2,7 @@
 
 Free and open-source iPhone location teleport. Tap the map, search a place, or drive a route — Locus injects coordinates through Apple’s **developer location service** into `locationd`, so Maps and other apps see the spoofed GPS (not just a Wi‑Fi lookup that outdoor GPS will overwrite).
 
-<p align="center">
-  <img src="docs/screenshots/map.png" alt="Locus map with spoof pin" width="180" />
-  <img src="docs/screenshots/spoofing.png" alt="Locus spoofing in 3D" width="180" />
-  <img src="docs/screenshots/joystick.png" alt="Locus joystick controls" width="180" />
-  <img src="docs/screenshots/route.png" alt="Locus route on map" width="180" />
-</p>
+
 
 ## Features
 

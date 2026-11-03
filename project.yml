@@ -32,6 +32,8 @@ targets:
         buildPhase: none
       - path: Vendor/idevice/idevice.h
         buildPhase: none
+    dependencies:
+      - target: LocusWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chrismack.locus
@@ -127,6 +129,7 @@ schemes:
     build:
       targets:
         Locus: all
+        LocusWidgets: all
     run:
       config: Release
     test:

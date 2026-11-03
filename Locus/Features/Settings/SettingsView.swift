@@ -12,6 +12,9 @@ struct SettingsView: View {
     @State private var showThemeCustomizer = false
     @State private var tunnelIP = TunnelConfig.targetIP
     @State private var localDevVPNInstalled = LocalDevVPN.isInstalled
+    @State private var backupFileURL: URL? = nil
+    @State private var showBackupImporter = false
+    @State private var backupStatusMessage: String? = nil
     @Environment(\.scenePhase) private var scenePhase
 
     private var supportsOnDevicePairing: Bool {
@@ -263,6 +266,97 @@ struct SettingsView: View {
                     Text("Choose the default connection mode for Points routes. 'Roads' calculates street routes with Apple Maps; 'Straight' connects waypoints with direct straight lines.")
                 }
 
+                // MARK: - Life360 Driving Mode Simulation
+                Section {
+                    Button {
+                        session.startDriveSimulation(pairing: pairing)
+                        dismiss()
+                    } label: {
+                        HStack {
+                            ZStack {
+                                Circle()
+                                    .fill(session.primaryAccentColor.opacity(0.15))
+                                    .frame(width: 36, height: 36)
+                                Image(systemName: "car.side.fill")
+                                    .foregroundStyle(session.primaryAccentColor)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Launch Life360 Driving Loop")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text("2.5 km circuit with dynamic throttle variance & 1.0s GPS")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "play.circle.fill")
+                                .font(.title3)
+                                .foregroundStyle(session.primaryAccentColor)
+                        }
+                    }
+                } header: {
+                    Text("Life360 Simulation")
+                } footer: {
+                    Text("Generates a realistic vehicular drive (~2.5 km perimeter) around your position that exceeds Life360's 0.5-mile trip threshold with continuous 1.0 Hz GPS updates.")
+                }
+
+                // MARK: - Backup & Profile Transfer
+                Section {
+                    Button {
+                        if let result = LocusBackupManager.shared.createBackupJSON(session: session, pairing: pairing) {
+                            backupFileURL = result.url
+                            LocusBackupManager.shared.presentShareSheet(with: result.url)
+                        } else {
+                            backupStatusMessage = "Failed to encode backup JSON."
+                        }
+                    } label: {
+                        HStack {
+                            Label("Export All Settings & Data", systemImage: "square.and.arrow.up")
+                                .foregroundStyle(session.primaryAccentColor)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Button {
+                        if let result = LocusBackupManager.shared.createBackupJSON(session: session, pairing: pairing),
+                           let jsonString = String(data: result.data, encoding: .utf8) {
+                            UIPasteboard.general.string = jsonString
+                            backupStatusMessage = "Backup profile copied to clipboard!"
+                        }
+                    } label: {
+                        Label("Copy Backup JSON to Clipboard", systemImage: "doc.on.doc")
+                    }
+
+                    Button {
+                        if let clip = UIPasteboard.general.string,
+                           let data = clip.data(using: .utf8) {
+                            do {
+                                let summary = try LocusBackupManager.shared.restoreBackup(from: data, session: session, pairing: pairing)
+                                backupStatusMessage = summary
+                            } catch {
+                                backupStatusMessage = "Restore failed: \(error.localizedDescription)"
+                            }
+                        } else {
+                            backupStatusMessage = "Clipboard is empty or does not contain valid backup JSON."
+                        }
+                    } label: {
+                        Label("Restore Profile from Clipboard", systemImage: "arrow.down.doc")
+                    }
+
+                    Button {
+                        showBackupImporter = true
+                    } label: {
+                        Label("Import Settings from File", systemImage: "folder")
+                    }
+                } header: {
+                    Text("Backup & Profile Transfer")
+                } footer: {
+                    Text("Export your themes, custom colors, routes, favorites, speed preferences, and pairing credentials into a single JSON profile to transfer between iPhones or save your setup.")
+                }
+
                 Section("Privacy") {
                     Text("Fully on-device. Favorites, recents, and saved routes stay in UserDefaults on your device. No analytics, no accounts, nothing uploaded.")
                         .font(.footnote)
@@ -325,6 +419,33 @@ struct SettingsView: View {
             }
             .fullScreenCover(isPresented: $showNameEasterEgg) {
                 LocusEasterEggView()
+            }
+            .fileImporter(
+                isPresented: $showBackupImporter,
+                allowedContentTypes: [.json, .data, .item]
+            ) { result in
+                switch result {
+                case .success(let url):
+                    let accessing = url.startAccessingSecurityScopedResource()
+                    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                    do {
+                        let data = try Data(contentsOf: url)
+                        let summary = try LocusBackupManager.shared.restoreBackup(from: data, session: session, pairing: pairing)
+                        backupStatusMessage = summary
+                    } catch {
+                        backupStatusMessage = "Failed to import backup: \(error.localizedDescription)"
+                    }
+                case .failure(let error):
+                    backupStatusMessage = error.localizedDescription
+                }
+            }
+            .alert("Profile Transfer", isPresented: Binding(
+                get: { backupStatusMessage != nil },
+                set: { if !$0 { backupStatusMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { backupStatusMessage = nil }
+            } message: {
+                Text(backupStatusMessage ?? "")
             }
             .onAppear {
                 localDevVPNInstalled = LocalDevVPN.isInstalled

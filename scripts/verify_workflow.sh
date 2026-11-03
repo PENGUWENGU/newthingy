@@ -80,13 +80,21 @@ else
   echo "✅ project.yml signing and target configuration verified"
 fi
 
-# 4. Verify critical app assets
+# 4. Verify critical app assets & widget extensions
 if [ ! -f "Locus/Resources/Info.plist" ]; then
   echo "❌ Missing Locus/Resources/Info.plist"
   ERRORS=$((ERRORS + 1))
 fi
 if [ ! -f "Vendor/idevice/idevice.h" ]; then
   echo "❌ Missing Vendor/idevice/idevice.h"
+  ERRORS=$((ERRORS + 1))
+fi
+if [ ! -f "LocusWidgets/LocusWidgetBundle.swift" ]; then
+  echo "❌ Missing LocusWidgets/LocusWidgetBundle.swift for Live Activities"
+  ERRORS=$((ERRORS + 1))
+fi
+if [ ! -f "Locus/Support/LocusBackupManager.swift" ]; then
+  echo "❌ Missing Locus/Support/LocusBackupManager.swift for Profile Transfer"
   ERRORS=$((ERRORS + 1))
 fi
 
