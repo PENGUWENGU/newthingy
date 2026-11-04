@@ -4,30 +4,30 @@ import SwiftUI
 
 // MARK: - Crash Recovery State Snapshot
 
-public struct SpoofSessionSnapshot: Codable, Equatable {
-    public enum SessionType: String, Codable {
+struct SpoofSessionSnapshot: Codable, Equatable {
+    enum SessionType: String, Codable {
         case teleport
         case joystick
         case route
     }
 
-    public var sessionType: SessionType
-    public var lastCoordinate: CodableCoordinate
-    public var locationName: String
-    public var travelModeRaw: String
-    public var currentSpeedMPS: Double
-    public var timestamp: Date
+    var sessionType: SessionType
+    var lastCoordinate: CodableCoordinate
+    var locationName: String
+    var travelModeRaw: String
+    var currentSpeedMPS: Double
+    var timestamp: Date
 
     // Route-specific recovery details
-    public var routeName: String?
-    public var routeCoordinates: [CodableCoordinate]?
-    public var routeWaypoints: [SavedWaypoint]?
-    public var currentSegmentIndex: Int?
-    public var routeProgress: Double?
-    public var isLoop: Bool?
-    public var remainingDistanceMeters: Double?
+    var routeName: String?
+    var routeCoordinates: [CodableCoordinate]?
+    var routeWaypoints: [SavedWaypoint]?
+    var currentSegmentIndex: Int?
+    var routeProgress: Double?
+    var isLoop: Bool?
+    var remainingDistanceMeters: Double?
 
-    public init(
+    init(
         sessionType: SessionType,
         coordinate: CLLocationCoordinate2D,
         locationName: String = "Interrupted Location",
@@ -60,21 +60,21 @@ public struct SpoofSessionSnapshot: Codable, Equatable {
 // MARK: - Crash Recovery Manager
 
 @MainActor
-public final class CrashRecoveryManager: ObservableObject {
-    public static let shared = CrashRecoveryManager()
+final class CrashRecoveryManager: ObservableObject {
+    static let shared = CrashRecoveryManager()
 
     private static let snapshotKey = "locus.crash_recovery.session_snapshot"
     private static let activeSpoofingFlagKey = "locus.crash_recovery.was_active"
 
-    @Published public var pendingRecoverySnapshot: SpoofSessionSnapshot? = nil
-    @Published public var showRecoveryPrompt: Bool = false
+    @Published var pendingRecoverySnapshot: SpoofSessionSnapshot? = nil
+    @Published var showRecoveryPrompt: Bool = false
 
     private init() {
         checkPendingCrashRecovery()
     }
 
     /// Check if the previous run terminated while spoofing was actively running
-    public func checkPendingCrashRecovery() {
+    func checkPendingCrashRecovery() {
         let wasActive = UserDefaults.standard.bool(forKey: Self.activeSpoofingFlagKey)
         guard wasActive else { return }
 
@@ -92,8 +92,8 @@ public final class CrashRecoveryManager: ObservableObject {
         }
     }
 
-    /// Continuously updates the heartbeat snapshot while spoofing or driving
-    public func updateHeartbeat(snapshot: SpoofSessionSnapshot) {
+    /// Continuously updates the heartbeat snapshot while spoofing or driving (callable from background simulation tasks)
+    nonisolated func updateHeartbeat(snapshot: SpoofSessionSnapshot) {
         UserDefaults.standard.set(true, forKey: Self.activeSpoofingFlagKey)
         if let data = try? JSONEncoder().encode(snapshot) {
             UserDefaults.standard.set(data, forKey: Self.snapshotKey)
@@ -101,15 +101,17 @@ public final class CrashRecoveryManager: ObservableObject {
     }
 
     /// Clears the crash recovery flag when spoofing is explicitly ended normally
-    public func clearSession() {
+    nonisolated func clearSession() {
         UserDefaults.standard.set(false, forKey: Self.activeSpoofingFlagKey)
         UserDefaults.standard.removeObject(forKey: Self.snapshotKey)
-        self.pendingRecoverySnapshot = nil
-        self.showRecoveryPrompt = false
+        Task { @MainActor in
+            self.pendingRecoverySnapshot = nil
+            self.showRecoveryPrompt = false
+        }
     }
 
     /// Dismisses prompt without resuming
-    public func dismissRecovery() {
+    func dismissRecovery() {
         clearSession()
     }
 }

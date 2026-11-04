@@ -4,16 +4,16 @@ import SwiftUI
 
 // MARK: - Road Speed Limit Model
 
-public struct RoadSpeedInfo: Equatable, Codable {
-    public let speedLimitMPS: Double
-    public let speedLimitMPH: Double
-    public let speedLimitKMH: Double
-    public let roadName: String
-    public let roadType: String
-    public let isExplicit: Bool // Explicitly signed maxspeed vs inferred road type default
-    public let timestamp: Date
+struct RoadSpeedInfo: Equatable, Codable {
+    let speedLimitMPS: Double
+    let speedLimitMPH: Double
+    let speedLimitKMH: Double
+    let roadName: String
+    let roadType: String
+    let isExplicit: Bool // Explicitly signed maxspeed vs inferred road type default
+    let timestamp: Date
 
-    public func formatted(unit: SpeedUnit) -> String {
+    func formatted(unit: SpeedUnit) -> String {
         switch unit {
         case .mph:
             return "\(Int(round(speedLimitMPH))) MPH"
@@ -28,22 +28,43 @@ public struct RoadSpeedInfo: Equatable, Codable {
 // MARK: - Road Speed Limit Service
 
 @MainActor
-public final class RoadSpeedLimitService: ObservableObject {
-    public static let shared = RoadSpeedLimitService()
+final class RoadSpeedLimitService: ObservableObject {
+    static let shared = RoadSpeedLimitService()
 
-    @Published public var currentRoadSpeed: RoadSpeedInfo? = nil
-    @Published public var isFetching: Bool = false
-    @Published public var lastQueriedCoordinate: CLLocationCoordinate2D? = nil
+    @Published var currentRoadSpeed: RoadSpeedInfo? = nil {
+        didSet {
+            cacheLock.lock()
+            _latestSpeedLimit = currentRoadSpeed
+            cacheLock.unlock()
+        }
+    }
+    @Published var isFetching: Bool = false
+    @Published var lastQueriedCoordinate: CLLocationCoordinate2D? = nil
 
-    // Cache: grid key (latitude & longitude rounded to ~100m) -> RoadSpeedInfo
+    // Thread-safe lock for concurrent background simulation tasks
+    private let cacheLock = NSLock()
     private var cache: [String: RoadSpeedInfo] = [:]
+    private var _latestSpeedLimit: RoadSpeedInfo? = nil
     private var activeTask: Task<Void, Never>? = nil
     private var lastFetchTime: Date = .distantPast
 
     private init() {}
 
-    /// Queries the posted or statutory speed limit for the given coordinate.
-    public func fetchSpeedLimit(at coordinate: CLLocationCoordinate2D, force: Bool = false) {
+    /// Thread-safe latest speed limit accessible from background simulation threads
+    nonisolated var latestSpeedLimit: RoadSpeedInfo? {
+        RoadSpeedLimitService.shared.cacheLock.lock()
+        defer { RoadSpeedLimitService.shared.cacheLock.unlock() }
+        return RoadSpeedLimitService.shared._latestSpeedLimit
+    }
+
+    /// Queries the posted or statutory speed limit for the given coordinate (thread-safe from any task)
+    nonisolated func fetchSpeedLimit(at coordinate: CLLocationCoordinate2D, force: Bool = false) {
+        Task { @MainActor in
+            RoadSpeedLimitService.shared.performFetch(at: coordinate, force: force)
+        }
+    }
+
+    private func performFetch(at coordinate: CLLocationCoordinate2D, force: Bool) {
         let key = cacheKey(for: coordinate)
 
         // 1. Check in-memory cache
@@ -81,10 +102,9 @@ public final class RoadSpeedLimitService: ObservableObject {
         return "\(latBucket)_\(lonBucket)"
     }
 
-    // MARK: - Remote Lookup with OSM Nominatim & Overpass Fallback
+    // MARK: - Remote Lookup with OSM Nominatim
 
     private func performLookup(coordinate: CLLocationCoordinate2D) async -> RoadSpeedInfo {
-        // Try Nominatim reverse lookup with extratags
         if let result = await fetchFromNominatim(coordinate: coordinate) {
             return result
         }

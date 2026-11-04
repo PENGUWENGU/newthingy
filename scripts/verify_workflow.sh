@@ -107,6 +107,15 @@ if grep -rn "setTravelMode(" Locus/ >/dev/null 2>&1 && ! grep -rn "func setTrave
   echo "❌ Detected setTravelMode call without method definition"
   ERRORS=$((ERRORS + 1))
 fi
+if grep -rn "\.coordinate\.clCoordinate" Locus/ >/dev/null 2>&1; then
+  echo "❌ Detected invalid .coordinate.clCoordinate call on CLLocationCoordinate2D"
+  ERRORS=$((ERRORS + 1))
+fi
+if grep -rn "public struct SpoofSessionSnapshot" Locus/ >/dev/null 2>&1; then
+  echo "❌ Detected public struct using internal types in SpoofSessionSnapshot"
+  ERRORS=$((ERRORS + 1))
+fi
+echo "✅ Swift source code sanity verified"
 
 if [ "$ERRORS" -gt 0 ]; then
   echo "❌ Integrity check failed with $ERRORS error(s)."

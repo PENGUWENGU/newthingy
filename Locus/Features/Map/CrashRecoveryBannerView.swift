@@ -3,17 +3,17 @@ import SwiftUI
 
 // MARK: - Crash Recovery Floating Banner
 
-public struct CrashRecoveryBannerView: View {
+struct CrashRecoveryBannerView: View {
     @ObservedObject var recoveryManager = CrashRecoveryManager.shared
     @ObservedObject var session: SpoofSession
     var pairing: PairingStore
 
-    public init(session: SpoofSession, pairing: PairingStore) {
+    init(session: SpoofSession, pairing: PairingStore) {
         self.session = session
         self.pairing = pairing
     }
 
-    public var body: some View {
+    var body: some View {
         if recoveryManager.showRecoveryPrompt, let snapshot = recoveryManager.pendingRecoverySnapshot {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top, spacing: 10) {

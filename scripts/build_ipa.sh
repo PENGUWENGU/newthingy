@@ -53,9 +53,12 @@ if ! command -v xcodegen >/dev/null 2>&1; then
   mkdir -p /tmp/xcodegen_install
   if curl -sSL -f --connect-timeout 15 --retry 2 "https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip" -o /tmp/xcodegen_install/xcodegen.zip; then
     unzip -qo /tmp/xcodegen_install/xcodegen.zip -d /tmp/xcodegen_install
-    if [ -f "/tmp/xcodegen_install/xcodegen/bin/xcodegen" ]; then
-      echo "Installed precompiled XcodeGen to /usr/local/bin..."
-      sudo cp "/tmp/xcodegen_install/xcodegen/bin/xcodegen" /usr/local/bin/ || cp "/tmp/xcodegen_install/xcodegen/bin/xcodegen" "$ROOT_DIR/xcodegen_bin"
+    if [ -f "/tmp/xcodegen_install/xcodegen/install.sh" ]; then
+      echo "Running XcodeGen install.sh to install binaries and SettingPresets..."
+      sudo bash "/tmp/xcodegen_install/xcodegen/install.sh" 2>/dev/null || {
+        sudo cp -r /tmp/xcodegen_install/xcodegen/bin/* /usr/local/bin/ 2>/dev/null || cp "/tmp/xcodegen_install/xcodegen/bin/xcodegen" "$ROOT_DIR/xcodegen_bin"
+        sudo cp -r /tmp/xcodegen_install/xcodegen/share/* /usr/local/share/ 2>/dev/null || true
+      }
       if [ -f "$ROOT_DIR/xcodegen_bin" ]; then
         chmod +x "$ROOT_DIR/xcodegen_bin"
         export PATH="$ROOT_DIR:$PATH"
@@ -217,6 +220,29 @@ if ! validate_app_bundle "$TARGET_CANDIDATE"; then
       BUILD_SUCCESS=1
     fi
   fi
+
+  if ! validate_app_bundle "$TARGET_CANDIDATE"; then
+    echo "Retrying without code sign identity (CODE_SIGNING_ALLOWED=NO)..."
+    if xcodebuild \
+      -project Locus.xcodeproj \
+      -scheme Locus \
+      -configuration "$CONFIG" \
+      -sdk iphoneos \
+      -destination 'generic/platform=iOS' \
+      -derivedDataPath "$DERIVED_DATA" \
+      -jobs "$NCPU" \
+      CODE_SIGNING_REQUIRED=NO \
+      CODE_SIGNING_ALLOWED=NO \
+      CODE_SIGN_IDENTITY="" \
+      CODE_SIGN_STYLE=Manual \
+      DEVELOPMENT_TEAM="" \
+      PROVISIONING_PROFILE_SPECIFIER="" \
+      CODE_SIGN_ENTITLEMENTS="" \
+      COMPILER_INDEX_STORE_ENABLE=NO \
+      build 2>&1 | tee -a "$ROOT_DIR/build.log"; then
+      BUILD_SUCCESS=1
+    fi
+  fi
 fi
 
 # ------------------------------------------------------------------------------
@@ -291,6 +317,12 @@ if [ ! -f "$STAGED_EXEC" ] || [ ! -s "$STAGED_EXEC" ]; then
   exit 1
 fi
 chmod +x "$STAGED_EXEC"
+
+# Ensure ad-hoc signature on staged bundle if codesign is available on host
+if command -v codesign >/dev/null 2>&1; then
+  echo "Applying ad-hoc signature to Payload/Locus.app..."
+  codesign --force --deep --sign - "$PAYLOAD_DIR/Locus.app" 2>/dev/null || true
+fi
 
 IPA_NAME="LocusPlus-unsigned.ipa"
 

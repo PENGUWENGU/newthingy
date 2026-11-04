@@ -2,15 +2,15 @@ import SwiftUI
 
 // MARK: - Road Speed Limit Sign Badge
 
-public struct SpeedLimitBadgeView: View {
+struct SpeedLimitBadgeView: View {
     @ObservedObject var speedService = RoadSpeedLimitService.shared
     @ObservedObject var session: SpoofSession
 
-    public init(session: SpoofSession) {
+    init(session: SpoofSession) {
         self.session = session
     }
 
-    public var body: some View {
+    var body: some View {
         if let info = speedService.currentRoadSpeed {
             Button {
                 SoundManager.play(.toggle)

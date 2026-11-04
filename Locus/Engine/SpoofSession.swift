@@ -490,9 +490,7 @@ final class SpoofSession: ObservableObject {
                 remainingCoords.append(coords[segIdx])
             }
 
-            let waypoints: [RouteWaypoint] = (snapshot.routeWaypoints ?? []).map {
-                RouteWaypoint(id: $0.id, coordinate: $0.coordinate.clCoordinate, name: $0.name, stopDuration: $0.stopDuration)
-            }
+            let waypoints: [RouteWaypoint] = (snapshot.routeWaypoints ?? []).map(\.routeWaypoint)
 
             followRoute(
                 remainingCoords,
@@ -840,7 +838,7 @@ final class SpoofSession: ObservableObject {
 
                     // Speed profiling with road limit adherence & dynamic 1–5 mph variance
                     let targetBaseSpeed: Double
-                    if self.adhereToSpeedLimits, let postedLimit = RoadSpeedLimitService.shared.currentRoadSpeed?.speedLimitMPS,
+                    if self.adhereToSpeedLimits, let postedLimit = RoadSpeedLimitService.shared.latestSpeedLimit?.speedLimitMPS,
                        (self.travelMode == .drive || self.travelMode == .motorcycle || self.isCarModeActive) {
                         targetBaseSpeed = postedLimit
                     } else {
