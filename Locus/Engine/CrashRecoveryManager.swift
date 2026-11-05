@@ -63,8 +63,8 @@ struct SpoofSessionSnapshot: Codable, Equatable {
 final class CrashRecoveryManager: ObservableObject {
     static let shared = CrashRecoveryManager()
 
-    private static let snapshotKey = "locus.crash_recovery.session_snapshot"
-    private static let activeSpoofingFlagKey = "locus.crash_recovery.was_active"
+    nonisolated static let snapshotKey = "locus.crash_recovery.session_snapshot"
+    nonisolated static let activeSpoofingFlagKey = "locus.crash_recovery.was_active"
 
     @Published var pendingRecoverySnapshot: SpoofSessionSnapshot? = nil
     @Published var showRecoveryPrompt: Bool = false

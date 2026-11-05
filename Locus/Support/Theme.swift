@@ -87,6 +87,8 @@ enum UIAppearanceStyle: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+typealias AccentTheme = AccentColorTheme
+
 // MARK: - Theme Persistence Manager
 
 enum ThemePreference {

@@ -25,6 +25,27 @@ struct RoadSpeedInfo: Equatable, Codable {
     }
 }
 
+// MARK: - Thread-Safe Speed Limit Storage (Nonisolated)
+
+final class SpeedLimitStorage: @unchecked Sendable {
+    static let shared = SpeedLimitStorage()
+    private let lock = NSLock()
+    private var _value: RoadSpeedInfo? = nil
+
+    var value: RoadSpeedInfo? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _value
+        }
+        set {
+            lock.lock()
+            _value = newValue
+            lock.unlock()
+        }
+    }
+}
+
 // MARK: - Road Speed Limit Service
 
 @MainActor
@@ -33,18 +54,13 @@ final class RoadSpeedLimitService: ObservableObject {
 
     @Published var currentRoadSpeed: RoadSpeedInfo? = nil {
         didSet {
-            cacheLock.lock()
-            _latestSpeedLimit = currentRoadSpeed
-            cacheLock.unlock()
+            SpeedLimitStorage.shared.value = currentRoadSpeed
         }
     }
     @Published var isFetching: Bool = false
     @Published var lastQueriedCoordinate: CLLocationCoordinate2D? = nil
 
-    // Thread-safe lock for concurrent background simulation tasks
-    private let cacheLock = NSLock()
     private var cache: [String: RoadSpeedInfo] = [:]
-    private var _latestSpeedLimit: RoadSpeedInfo? = nil
     private var activeTask: Task<Void, Never>? = nil
     private var lastFetchTime: Date = .distantPast
 
@@ -52,9 +68,7 @@ final class RoadSpeedLimitService: ObservableObject {
 
     /// Thread-safe latest speed limit accessible from background simulation threads
     nonisolated var latestSpeedLimit: RoadSpeedInfo? {
-        RoadSpeedLimitService.shared.cacheLock.lock()
-        defer { RoadSpeedLimitService.shared.cacheLock.unlock() }
-        return RoadSpeedLimitService.shared._latestSpeedLimit
+        SpeedLimitStorage.shared.value
     }
 
     /// Queries the posted or statutory speed limit for the given coordinate (thread-safe from any task)

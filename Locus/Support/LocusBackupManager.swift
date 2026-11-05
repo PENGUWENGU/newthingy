@@ -4,62 +4,62 @@ import UIKit
 
 // MARK: - Comprehensive Backup & Profile Model
 
-public struct LocusBackupProfile: Codable {
-    public var version: Int = 1
-    public var exportDate: Date = Date()
-    public var appVersion: String = "1.0.2"
+struct LocusBackupProfile: Codable {
+    var version: Int = 1
+    var exportDate: Date = Date()
+    var appVersion: String = "1.0.2"
 
     // Theme & Visual Preferences
-    public struct ThemeBackup: Codable {
-        public var accentTheme: String
-        public var customPrimaryHex: String
-        public var customSecondaryHex: String
-        public var customTextColorHex: String
-        public var isCustomTextColorEnabled: Bool
-        public var customMenuTintHex: String
-        public var isMenuTintEnabled: Bool
-        public var customGlassTintHex: String
-        public var isGlassTintEnabled: Bool
-        public var appearanceStyle: String
-        public var completionFlashHex: String
+    struct ThemeBackup: Codable {
+        var accentTheme: String
+        var customPrimaryHex: String
+        var customSecondaryHex: String
+        var customTextColorHex: String
+        var isCustomTextColorEnabled: Bool
+        var customMenuTintHex: String
+        var isMenuTintEnabled: Bool
+        var customGlassTintHex: String
+        var isGlassTintEnabled: Bool
+        var appearanceStyle: String
+        var completionFlashHex: String
     }
-    public var theme: ThemeBackup
+    var theme: ThemeBackup
 
     // Simulation Defaults & Movement Preferences
-    public struct DefaultsBackup: Codable {
-        public var defaultTravelMode: String
-        public var speedUnit: String
-        public var customSpeedMPS: Double?
-        public var speedVarianceMPH: Double
-        public var speedRandomnessEnabled: Bool
-        public var smartTrafficLights: Bool
-        public var busModeSmartStops: Bool
-        public var travelerName: String
-        public var liveActivitiesEnabled: Bool
-        public var targetTunnelIP: String
-        public var defaultConnectionType: String
-        public var isSoundEnabled: Bool
+    struct DefaultsBackup: Codable {
+        var defaultTravelMode: String
+        var speedUnit: String
+        var customSpeedMPS: Double?
+        var speedVarianceMPH: Double
+        var speedRandomnessEnabled: Bool
+        var smartTrafficLights: Bool
+        var busModeSmartStops: Bool
+        var travelerName: String
+        var liveActivitiesEnabled: Bool
+        var targetTunnelIP: String
+        var defaultConnectionType: String
+        var isSoundEnabled: Bool
     }
-    public var defaults: DefaultsBackup
+    var defaults: DefaultsBackup
 
     // User Stored Data
-    public var favorites: [SavedPlace]
-    public var recents: [SavedPlace]
-    public var savedRoutes: [SavedRoute]
+    var favorites: [SavedPlace]
+    var recents: [SavedPlace]
+    var savedRoutes: [SavedRoute]
 
     // Device Pairing Credentials (Optional base64 plist)
-    public var pairingPlistBase64: String?
+    var pairingPlistBase64: String?
 }
 
 // MARK: - Backup & Transfer Manager
 
 @MainActor
-public final class LocusBackupManager {
-    public static let shared = LocusBackupManager()
+final class LocusBackupManager {
+    static let shared = LocusBackupManager()
     private init() {}
 
     /// Exports all colors, routes, places, defaults, and pairing file to JSON.
-    public func createBackupJSON(session: SpoofSession, pairing: PairingStore) -> (data: Data, url: URL)? {
+    func createBackupJSON(session: SpoofSession, pairing: PairingStore) -> (data: Data, url: URL)? {
         let themeBackup = LocusBackupProfile.ThemeBackup(
             accentTheme: session.accentTheme.rawValue,
             customPrimaryHex: session.customPrimaryHex,
@@ -127,14 +127,14 @@ public final class LocusBackupManager {
 
     /// Restores complete state from a JSON profile.
     @discardableResult
-    public func restoreBackup(from data: Data, session: SpoofSession, pairing: PairingStore) throws -> String {
+    func restoreBackup(from data: Data, session: SpoofSession, pairing: PairingStore) throws -> String {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
         let profile = try decoder.decode(LocusBackupProfile.self, from: data)
 
         // 1. Restore Theme & Colors
-        if let accent = AccentTheme(rawValue: profile.theme.accentTheme) {
+        if let accent = AccentColorTheme(rawValue: profile.theme.accentTheme) {
             session.accentTheme = accent
             ThemePreference.accent = accent
         }
@@ -222,7 +222,7 @@ public final class LocusBackupManager {
     }
 
     /// Share sheet launcher for export file.
-    public func presentShareSheet(with fileURL: URL) {
+    func presentShareSheet(with fileURL: URL) {
         guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let rootVC = windowScene.windows.first?.rootViewController else { return }
 

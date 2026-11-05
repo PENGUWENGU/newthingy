@@ -220,6 +220,177 @@ struct SetupFlowView: View {
 
     // MARK: - Personalize & Defaults Onboarding
 
+    @ViewBuilder
+    private var themeSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("ACCENT COLOR THEME")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+                .tracking(0.5)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(AccentColorTheme.allCases) { theme in
+                        let isSelected = (session.accentTheme == theme)
+                        Button {
+                            session.setAccentTheme(theme)
+                        } label: {
+                            VStack(spacing: 8) {
+                                ZStack {
+                                    Circle()
+                                        .fill(theme.primaryColor)
+                                        .frame(width: 44, height: 44)
+                                        .overlay(
+                                            Circle()
+                                                .stroke(isSelected ? Color.white : Color.clear, lineWidth: 3)
+                                        )
+                                    if isSelected {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 16, weight: .bold))
+                                            .foregroundStyle(.white)
+                                    }
+                                }
+                                Text(theme.rawValue)
+                                    .font(.caption2.weight(isSelected ? .bold : .regular))
+                                    .foregroundStyle(isSelected ? .primary : .secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(white: 0.12).opacity(0.8))
+        )
+    }
+
+    @ViewBuilder
+    private var movementSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("MOVEMENT & SPEED DEFAULTS")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+                .tracking(0.5)
+
+            HStack(spacing: 10) {
+                ForEach([TravelMode.walk, .cycle, .drive]) { mode in
+                    let isSelected = (session.travelMode == mode)
+                    Button {
+                        session.selectTravelMode(mode)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: mode.icon)
+                            Text(mode.title)
+                        }
+                        .font(.subheadline.weight(isSelected ? .bold : .medium))
+                        .foregroundStyle(isSelected ? .black : .primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(isSelected ? session.primaryAccentColor : Color.white.opacity(0.08))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Picker("Speed Unit", selection: Binding(
+                get: { session.speedUnit },
+                set: { session.setSpeedUnit($0) }
+            )) {
+                ForEach(SpeedUnit.allCases) { unit in
+                    Text(unit.title).tag(unit)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(white: 0.12).opacity(0.8))
+        )
+    }
+
+    @ViewBuilder
+    private var safeguardsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("SIMULATION & REALISM")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+                .tracking(0.5)
+
+            Toggle(isOn: Binding(
+                get: { session.liveActivitiesEnabled },
+                set: {
+                    session.liveActivitiesEnabled = $0
+                    UserDefaults.standard.set($0, forKey: "locus.liveActivitiesEnabled")
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Live Activities & Dynamic Island")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Lock Screen HUD with real-time ETA and coordinates")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Toggle(isOn: Binding(
+                get: { session.speedRandomnessEnabled },
+                set: { session.setSpeedRandomnessEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Life360 Driving Mode Simulation")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Dynamic throttle variance and 1.0s continuous GPS injection")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(white: 0.12).opacity(0.8))
+        )
+    }
+
+    @ViewBuilder
+    private var customizeActionsSection: some View {
+        VStack(spacing: 12) {
+            primaryButton("Save & Continue") {
+                withAnimation { step = .pairing }
+            }
+
+            Button {
+                if let clip = UIPasteboard.general.string,
+                   let data = clip.data(using: .utf8) {
+                    do {
+                        let summary = try LocusBackupManager.shared.restoreBackup(from: data, session: session, pairing: pairing)
+                        session.lastError = summary
+                        withAnimation { step = .vpn }
+                    } catch {
+                        session.lastError = "Could not parse profile from clipboard: \(error.localizedDescription)"
+                    }
+                } else {
+                    session.lastError = "Clipboard does not contain a Locus JSON backup profile."
+                }
+            } label: {
+                Text("Restore from Profile Backup")
+                    .font(.subheadline)
+                    .foregroundStyle(session.primaryAccentColor)
+                    .padding(.vertical, 8)
+            }
+        }
+        .padding(.top, 8)
+        .padding(.bottom, 24)
+    }
+
     private var customizePage: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -232,167 +403,10 @@ struct SetupFlowView: View {
                 }
                 .padding(.top, 16)
 
-                // 1. Accent Color Theme
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("ACCENT COLOR THEME")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.secondary)
-                        .tracking(0.5)
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 12) {
-                            ForEach(AccentTheme.allCases) { theme in
-                                let isSelected = session.accentTheme == theme
-                                Button {
-                                    session.setAccentTheme(theme)
-                                } label: {
-                                    VStack(spacing: 8) {
-                                        ZStack {
-                                            Circle()
-                                                .fill(theme.primaryColor)
-                                                .frame(width: 44, height: 44)
-                                                .overlay(
-                                                    Circle()
-                                                        .stroke(isSelected ? Color.white : Color.clear, lineWidth: 3)
-                                                )
-                                            if isSelected {
-                                                Image(systemName: "checkmark")
-                                                    .font(.system(size: 16, weight: .bold))
-                                                    .foregroundStyle(.white)
-                                            }
-                                        }
-                                        Text(theme.rawValue)
-                                            .font(.caption2.weight(isSelected ? .bold : .regular))
-                                            .foregroundStyle(isSelected ? .primary : .secondary)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-                .padding(16)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color(white: 0.12).opacity(0.8))
-                )
-
-                // 2. Default Travel Mode & Speed Unit
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("MOVEMENT & SPEED DEFAULTS")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.secondary)
-                        .tracking(0.5)
-
-                    HStack(spacing: 10) {
-                        ForEach([TravelMode.walk, .cycle, .drive]) { mode in
-                            let isSelected = session.travelMode == mode
-                            Button {
-                                session.selectTravelMode(mode)
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: mode.icon)
-                                    Text(mode.title)
-                                }
-                                .font(.subheadline.weight(isSelected ? .bold : .medium))
-                                .foregroundStyle(isSelected ? .black : .primary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(isSelected ? session.primaryAccentColor : Color.white.opacity(0.08))
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-
-                    Picker("Speed Unit", selection: Binding(
-                        get: { session.speedUnit },
-                        set: { session.setSpeedUnit($0) }
-                    )) {
-                        ForEach(SpeedUnit.allCases) { unit in
-                            Text(unit.title).tag(unit)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-                .padding(16)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color(white: 0.12).opacity(0.8))
-                )
-
-                // 3. Realism & Live Activities
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("SIMULATION & REALISM")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.secondary)
-                        .tracking(0.5)
-
-                    Toggle(isOn: Binding(
-                        get: { session.liveActivitiesEnabled },
-                        set: {
-                            session.liveActivitiesEnabled = $0
-                            UserDefaults.standard.set($0, forKey: "locus.liveActivitiesEnabled")
-                        }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Live Activities & Dynamic Island")
-                                .font(.subheadline.weight(.semibold))
-                            Text("Lock Screen HUD with real-time ETA and coordinates")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Toggle(isOn: Binding(
-                        get: { session.speedRandomnessEnabled },
-                        set: { session.setSpeedRandomnessEnabled($0) }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Life360 Driving Mode Simulation")
-                                .font(.subheadline.weight(.semibold))
-                            Text("Dynamic throttle variance and 1.0s continuous GPS injection")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding(16)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color(white: 0.12).opacity(0.8))
-                )
-
-                VStack(spacing: 12) {
-                    primaryButton("Save & Continue") {
-                        withAnimation { step = .pairing }
-                    }
-
-                    Button {
-                        if let clip = UIPasteboard.general.string,
-                           let data = clip.data(using: .utf8) {
-                            do {
-                                let summary = try LocusBackupManager.shared.restoreBackup(from: data, session: session, pairing: pairing)
-                                session.lastError = summary
-                                withAnimation { step = .vpn }
-                            } catch {
-                                session.lastError = "Could not parse profile from clipboard: \(error.localizedDescription)"
-                            }
-                        } else {
-                            session.lastError = "Clipboard does not contain a Locus JSON backup profile."
-                        }
-                    } label: {
-                        Text("Restore from Profile Backup")
-                            .font(.subheadline)
-                            .foregroundStyle(session.primaryAccentColor)
-                            .padding(.vertical, 8)
-                    }
-                }
-                .padding(.top, 8)
-                .padding(.bottom, 24)
+                themeSection
+                movementSection
+                safeguardsSection
+                customizeActionsSection
             }
             .padding(.horizontal, 24)
         }

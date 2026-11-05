@@ -839,7 +839,7 @@ final class SpoofSession: ObservableObject {
                     // Speed profiling with road limit adherence & dynamic 1–5 mph variance
                     let targetBaseSpeed: Double
                     if self.adhereToSpeedLimits, let postedLimit = RoadSpeedLimitService.shared.latestSpeedLimit?.speedLimitMPS,
-                       (self.travelMode == .drive || self.travelMode == .motorcycle || self.isCarModeActive) {
+                       (self.travelMode == .drive || self.travelMode == .cycle || self.isCarModeActive) {
                         targetBaseSpeed = postedLimit
                     } else {
                         targetBaseSpeed = self.currentSpeedMPS
@@ -918,7 +918,7 @@ final class SpoofSession: ObservableObject {
                     }
 
                     // Periodically fetch road speed limits for HUD & vehicle mode
-                    if (self.travelMode == .drive || self.travelMode == .motorcycle || self.isCarModeActive) {
+                    if (self.travelMode == .drive || self.travelMode == .cycle || self.isCarModeActive) {
                         RoadSpeedLimitService.shared.fetchSpeedLimit(at: finalCoord)
                     }
 
@@ -1303,6 +1303,14 @@ final class SpoofSession: ObservableObject {
             try? await Task.sleep(nanoseconds: 100_000_000)
             impact.impactOccurred()
         }
+    }
+
+    func addFavorite(_ place: SavedPlace) {
+        addFavorite(name: place.name, coordinate: place.coordinate)
+    }
+
+    func addRecent(_ place: SavedPlace) {
+        pushNamedRecent(name: place.name, coordinate: place.coordinate)
     }
 
     func addFavorite(name: String, coordinate: CLLocationCoordinate2D) {

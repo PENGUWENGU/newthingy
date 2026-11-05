@@ -62,6 +62,7 @@ public enum SpeedUnit: String, CaseIterable, Identifiable {
     public var id: String { rawValue }
 
     public var label: String { rawValue }
+    public var title: String { rawValue }
 
     /// Converts a value in this unit to meters per second.
     public func toMPS(_ value: Double) -> Double {
