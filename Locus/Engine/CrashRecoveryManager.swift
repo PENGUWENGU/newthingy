@@ -21,6 +21,7 @@ struct SpoofSessionSnapshot: Codable, Equatable {
     // Route-specific recovery details
     var routeName: String?
     var routeCoordinates: [CodableCoordinate]?
+    var routeCoordinateSegments: [[CodableCoordinate]]?
     var routeWaypoints: [SavedWaypoint]?
     var currentSegmentIndex: Int?
     var routeProgress: Double?
@@ -35,6 +36,7 @@ struct SpoofSessionSnapshot: Codable, Equatable {
         currentSpeedMPS: Double = 11.2,
         routeName: String? = nil,
         routeCoordinates: [CLLocationCoordinate2D]? = nil,
+        routeCoordinateSegments: [[CLLocationCoordinate2D]]? = nil,
         routeWaypoints: [RouteWaypoint]? = nil,
         currentSegmentIndex: Int? = nil,
         routeProgress: Double? = nil,
@@ -48,7 +50,13 @@ struct SpoofSessionSnapshot: Codable, Equatable {
         self.currentSpeedMPS = currentSpeedMPS
         self.timestamp = Date()
         self.routeName = routeName
-        self.routeCoordinates = routeCoordinates?.map { CodableCoordinate($0) }
+        if let segs = routeCoordinateSegments?.filter({ !$0.isEmpty }), !segs.isEmpty {
+            self.routeCoordinateSegments = segs.map { $0.map { CodableCoordinate($0) } }
+            self.routeCoordinates = segs.flatMap { $0 }.map { CodableCoordinate($0) }
+        } else {
+            self.routeCoordinateSegments = nil
+            self.routeCoordinates = routeCoordinates?.map { CodableCoordinate($0) }
+        }
         self.routeWaypoints = routeWaypoints?.map { SavedWaypoint(id: $0.id, coordinate: $0.coordinate, name: $0.name, stopDuration: $0.stopDuration) }
         self.currentSegmentIndex = currentSegmentIndex
         self.routeProgress = routeProgress
@@ -68,6 +76,9 @@ final class CrashRecoveryManager: ObservableObject {
 
     @Published var pendingRecoverySnapshot: SpoofSessionSnapshot? = nil
     @Published var showRecoveryPrompt: Bool = false
+
+    private nonisolated static let stateLock = NSLock()
+    private nonisolated(unsafe) static var sessionEpoch: UInt64 = 0
 
     private init() {
         checkPendingCrashRecovery()
@@ -94,19 +105,31 @@ final class CrashRecoveryManager: ObservableObject {
 
     /// Continuously updates the heartbeat snapshot while spoofing or driving (callable from background simulation tasks)
     nonisolated func updateHeartbeat(snapshot: SpoofSessionSnapshot) {
+        Self.stateLock.lock()
+        Self.sessionEpoch &+= 1
         UserDefaults.standard.set(true, forKey: Self.activeSpoofingFlagKey)
         if let data = try? JSONEncoder().encode(snapshot) {
             UserDefaults.standard.set(data, forKey: Self.snapshotKey)
         }
+        Self.stateLock.unlock()
     }
 
     /// Clears the crash recovery flag when spoofing is explicitly ended normally
     nonisolated func clearSession() {
+        Self.stateLock.lock()
+        Self.sessionEpoch &+= 1
+        let capturedEpoch = Self.sessionEpoch
         UserDefaults.standard.set(false, forKey: Self.activeSpoofingFlagKey)
         UserDefaults.standard.removeObject(forKey: Self.snapshotKey)
-        Task { @MainActor in
-            self.pendingRecoverySnapshot = nil
-            self.showRecoveryPrompt = false
+        Self.stateLock.unlock()
+
+        Task { @MainActor [weak self] in
+            Self.stateLock.lock()
+            let currentEpoch = Self.sessionEpoch
+            Self.stateLock.unlock()
+            guard currentEpoch == capturedEpoch else { return }
+            self?.pendingRecoverySnapshot = nil
+            self?.showRecoveryPrompt = false
         }
     }
 

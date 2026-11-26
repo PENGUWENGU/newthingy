@@ -64,6 +64,7 @@ struct SavedRoute: Identifiable, Codable, Equatable {
     var connectionTypeRaw: String
     var waypoints: [SavedWaypoint]
     var coordinates: [CodableCoordinate]
+    var coordinateSegments: [[CodableCoordinate]]?
     var distanceMeters: Double
     var isLoop: Bool
 
@@ -75,6 +76,7 @@ struct SavedRoute: Identifiable, Codable, Equatable {
         connectionType: RouteConnectionType = .road,
         waypoints: [RouteWaypoint] = [],
         coordinates: [CLLocationCoordinate2D],
+        coordinateSegments: [[CLLocationCoordinate2D]]? = nil,
         distanceMeters: Double,
         isLoop: Bool = false
     ) {
@@ -85,7 +87,14 @@ struct SavedRoute: Identifiable, Codable, Equatable {
         self.methodRaw = method.rawValue
         self.connectionTypeRaw = connectionType.rawValue
         self.waypoints = waypoints.map { SavedWaypoint(id: $0.id, coordinate: $0.coordinate, name: $0.name, stopDuration: $0.stopDuration) }
-        self.coordinates = coordinates.map { CodableCoordinate($0) }
+
+        if let segs = coordinateSegments?.filter({ !$0.isEmpty }), !segs.isEmpty {
+            self.coordinateSegments = segs.map { $0.map { CodableCoordinate($0) } }
+            self.coordinates = segs.flatMap { $0 }.map { CodableCoordinate($0) }
+        } else {
+            self.coordinateSegments = nil
+            self.coordinates = coordinates.map { CodableCoordinate($0) }
+        }
         self.distanceMeters = distanceMeters
         self.isLoop = isLoop
     }
@@ -103,7 +112,18 @@ struct SavedRoute: Identifiable, Codable, Equatable {
     }
 
     var clCoordinates: [CLLocationCoordinate2D] {
-        coordinates.map { $0.clCoordinate }
+        if let coordinateSegments, !coordinateSegments.isEmpty {
+            return coordinateSegments.flatMap { $0.map { $0.clCoordinate } }
+        }
+        return coordinates.map { $0.clCoordinate }
+    }
+
+    var clCoordinateSegments: [[CLLocationCoordinate2D]] {
+        if let coordinateSegments {
+            let nonEmpty = coordinateSegments.filter { !$0.isEmpty }.map { $0.map { $0.clCoordinate } }
+            if !nonEmpty.isEmpty { return nonEmpty }
+        }
+        return coordinates.isEmpty ? [] : [coordinates.map { $0.clCoordinate }]
     }
 
     var formattedDistance: String {

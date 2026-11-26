@@ -18,7 +18,9 @@ struct MapHomeView: View {
     @State private var waypoints: [RouteWaypoint] = []
     @State private var freehandCoordinates: [CLLocationCoordinate2D] = []
     @State private var calculatedRoute: [CLLocationCoordinate2D] = []
+    @State private var routeSegments: [[CLLocationCoordinate2D]] = []
     @State private var isRouting = false
+    @State private var routingTask: Task<Void, Never>? = nil
     @State private var loopRoute = false
     @State private var selectedWaypointId: UUID?
     @State private var showRouteSheet = false
@@ -64,6 +66,14 @@ struct MapHomeView: View {
         return []
     }
 
+    private var displayRouteSegments: [[CLLocationCoordinate2D]] {
+        if routeSegments.count > 1 {
+            return routeSegments
+        }
+        let flat = displayRouteCoordinates
+        return flat.isEmpty ? [] : [flat]
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             mapContainerView
@@ -101,6 +111,25 @@ struct MapHomeView: View {
             favoritePromptAlertView
         } message: {
             Text("Enter a custom name for this favorite location.")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .locusImportGPX)) { note in
+            if let url = note.object as? URL {
+                importGPX(url)
+            }
+        }
+        .fileImporter(
+            isPresented: $showGPXImporter,
+            allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml, .xml],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    importGPX(url)
+                }
+            case .failure(let error):
+                session.lastError = error.localizedDescription
+            }
         }
     }
 
@@ -282,6 +311,7 @@ struct MapHomeView: View {
             waypoints: $waypoints,
             freehandCoordinates: $freehandCoordinates,
             calculatedRoute: $calculatedRoute,
+            routeSegments: $routeSegments,
             isRouting: $isRouting,
             loopRoute: $loopRoute,
             onBuildRoute: buildPointsRoute,
@@ -289,8 +319,13 @@ struct MapHomeView: View {
             onStopRoute: {
                 showEndSpoofConfirmation = true
             },
-            onImportGPX: {},
-            onExportGPX: {},
+            onImportGPX: {
+                showRouteSheet = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    showGPXImporter = true
+                }
+            },
+            onExportGPX: exportGPX,
             onSmoothFreehand: smoothFreehandRoute,
             onClearRoute: clearAllRouteData,
             onAddPinAsWaypoint: addPinAsWaypoint,
@@ -320,6 +355,7 @@ struct MapHomeView: View {
                     session.updateActiveRoute(
                         newCoordinates: displayRouteCoordinates,
                         newWaypoints: waypoints,
+                        coordinateSegments: displayRouteSegments.count > 1 ? displayRouteSegments : nil,
                         pairing: pairing,
                         loop: loopRoute
                     )
@@ -411,6 +447,10 @@ struct MapHomeView: View {
         if !isFreehandDragging {
             isFreehandDragging = true
             importedGPXTrack = nil
+            routeSegments = []
+            routingTask?.cancel()
+            routingTask = nil
+            isRouting = false
         }
 
         // Add coordinate if sufficiently distant from last point
@@ -439,8 +479,12 @@ struct MapHomeView: View {
         let name = "Waypoint \(waypoints.count + 1)"
         waypoints.append(RouteWaypoint(coordinate: coord, name: name))
         importedGPXTrack = nil
+        routeSegments = []
         if waypoints.count >= 2 {
             if routeConnectionType == .straight {
+                routingTask?.cancel()
+                routingTask = nil
+                isRouting = false
                 calculatedRoute = RouteBuilder.multiPointStraightRoute(waypoints: waypoints.map(\.coordinate))
             } else {
                 buildPointsRoute()
@@ -453,13 +497,20 @@ struct MapHomeView: View {
         SoundManager.play(.alert)
         waypoints.remove(at: index)
         selectedWaypointId = nil
+        routeSegments = []
         if waypoints.count >= 2 {
             if routeConnectionType == .straight {
+                routingTask?.cancel()
+                routingTask = nil
+                isRouting = false
                 calculatedRoute = RouteBuilder.multiPointStraightRoute(waypoints: waypoints.map(\.coordinate))
             } else {
                 buildPointsRoute()
             }
         } else {
+            routingTask?.cancel()
+            routingTask = nil
+            isRouting = false
             calculatedRoute.removeAll()
         }
     }
@@ -494,24 +545,39 @@ struct MapHomeView: View {
     }
 
     private func buildPointsRoute() {
-        guard waypoints.count >= 2 else { return }
+        routingTask?.cancel()
+        routingTask = nil
+
+        guard waypoints.count >= 2 else {
+            isRouting = false
+            return
+        }
         if routeConnectionType == .straight {
+            isRouting = false
+            routeSegments = []
             calculatedRoute = RouteBuilder.multiPointStraightRoute(waypoints: waypoints.map(\.coordinate))
             return
         }
 
         isRouting = true
         let coords = waypoints.map(\.coordinate)
-        Task {
+        let mode = session.travelMode
+        routingTask = Task {
             do {
-                let route = try await RouteBuilder.multiPointRoadRoute(waypoints: coords, mode: session.travelMode)
+                let route = try await RouteBuilder.multiPointRoadRoute(waypoints: coords, mode: mode)
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
+                    guard !Task.isCancelled else { return }
+                    self.routeSegments = []
                     self.calculatedRoute = route
                     self.isRouting = false
                 }
             } catch {
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
+                    guard !Task.isCancelled else { return }
                     self.isRouting = false
+                    self.routeSegments = []
                     // Fallback to straight line if roads unavailable in region
                     self.calculatedRoute = RouteBuilder.multiPointStraightRoute(waypoints: coords)
                     self.session.lastError = "Road route unavailable; connected with straight segments."
@@ -522,20 +588,26 @@ struct MapHomeView: View {
 
     private func smoothFreehandRoute() {
         guard freehandCoordinates.count >= 2 else { return }
+        routeSegments = []
         calculatedRoute = RouteBuilder.processFreehandPath(coordinates: freehandCoordinates, sampleMeters: 6, smooth: true)
     }
 
     private func clearAllRouteData() {
+        routingTask?.cancel()
+        routingTask = nil
+        isRouting = false
         waypoints.removeAll()
         freehandCoordinates.removeAll()
         calculatedRoute.removeAll()
+        routeSegments.removeAll()
         selectedWaypointId = nil
         importedGPXTrack = nil
     }
 
     private func playRoute() {
-        let path = displayRouteCoordinates
-        guard path.count >= 2 else {
+        let segs = displayRouteSegments
+        let flat = displayRouteCoordinates
+        guard flat.count >= 2 else {
             session.lastError = "Add at least 2 points or draw a freehand path first."
             return
         }
@@ -544,19 +616,26 @@ struct MapHomeView: View {
                 routeMethod = .points
             }
         }
-        session.followRoute(path, waypoints: waypoints, pairing: pairing, loop: loopRoute)
+        let destName = importedGPXTrack?.name ?? ""
+        if segs.count > 1 {
+            session.followRoute(segments: segs, waypoints: waypoints, destinationName: destName, pairing: pairing, loop: loopRoute)
+        } else {
+            session.followRoute(flat, waypoints: waypoints, destinationName: destName, pairing: pairing, loop: loopRoute)
+        }
     }
 
     private func saveCurrentRouteFromMap() {
+        let segs = displayRouteSegments
         let path = displayRouteCoordinates
         guard path.count >= 2 else { return }
-        let dist = RouteBuilder.totalDistance(of: path)
+        let dist = RouteBuilder.totalDistance(ofSegments: segs)
         let route = SavedRoute(
             name: mapSaveRouteName,
             method: routeMethod,
             connectionType: routeConnectionType,
             waypoints: waypoints,
             coordinates: path,
+            coordinateSegments: segs.count > 1 ? segs : nil,
             distanceMeters: dist,
             isLoop: loopRoute
         )
@@ -564,14 +643,23 @@ struct MapHomeView: View {
     }
 
     private func loadSavedRoute(_ savedRoute: SavedRoute) {
+        routingTask?.cancel()
+        routingTask = nil
+        isRouting = false
         routeModeActive = true
         routeMethod = savedRoute.method
         routeConnectionType = savedRoute.connectionType
         loopRoute = savedRoute.isLoop
         waypoints = savedRoute.clWaypoints
 
-        if savedRoute.method == .points {
+        let savedSegments = savedRoute.clCoordinateSegments
+        if savedSegments.count > 1 {
             freehandCoordinates = []
+            routeSegments = savedSegments
+            calculatedRoute = savedRoute.clCoordinates
+        } else if savedRoute.method == .points {
+            freehandCoordinates = []
+            routeSegments = []
             if savedRoute.connectionType == .straight {
                 calculatedRoute = RouteBuilder.multiPointStraightRoute(waypoints: savedRoute.clCoordinates)
             } else {
@@ -579,6 +667,7 @@ struct MapHomeView: View {
             }
         } else {
             waypoints = []
+            routeSegments = []
             freehandCoordinates = savedRoute.clCoordinates
             calculatedRoute = savedRoute.clCoordinates
         }
@@ -720,7 +809,7 @@ struct MapHomeView: View {
     }
 
     private var routeSummaryActionBar: some View {
-        let totalDist = RouteBuilder.totalDistance(of: displayRouteCoordinates)
+        let totalDist = RouteBuilder.totalDistance(ofSegments: displayRouteSegments)
         let estDuration = RouteBuilder.estimatedDuration(distance: totalDist, speed: session.currentSpeedMPS)
 
         return HStack(spacing: 8) {
@@ -1051,56 +1140,71 @@ struct MapHomeView: View {
 
     @MapContentBuilder
     private var routePolylines: some MapContent {
-        if session.isFollowingRoute && !session.remainingRouteCoordinates.isEmpty {
-            if session.completedRouteCoordinates.count > 1 {
-                MapPolyline(coordinates: session.completedRouteCoordinates)
-                    .stroke(
-                        routeMethod == .freehand ? LocusTheme.accentSecondary.opacity(0.3) : LocusTheme.accent.opacity(0.3),
-                        style: StrokeStyle(lineWidth: max(3, session.pathWidth.width - 1.5), lineCap: .round, lineJoin: .round, dash: [6, 4])
-                    )
-            }
+        if session.isFollowingRoute && (!session.remainingRouteSegments.isEmpty || !session.remainingRouteCoordinates.isEmpty) {
+            let compSegments = session.completedRouteSegments.isEmpty
+                ? (session.completedRouteCoordinates.isEmpty ? [] : [session.completedRouteCoordinates])
+                : session.completedRouteSegments
+            let remSegments = session.remainingRouteSegments.isEmpty
+                ? (session.remainingRouteCoordinates.isEmpty ? [] : [session.remainingRouteCoordinates])
+                : session.remainingRouteSegments
 
-            if session.remainingRouteCoordinates.count > 1 {
-                MapPolyline(coordinates: session.remainingRouteCoordinates)
-                    .stroke(
-                        (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.35),
-                        style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
-                    )
-
-                MapPolyline(coordinates: session.remainingRouteCoordinates)
-                    .stroke(
-                        routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
-                        style: StrokeStyle(lineWidth: session.pathWidth.width, lineCap: .round, lineJoin: .round)
-                    )
-
-                MapPolyline(coordinates: session.remainingRouteCoordinates)
-                    .stroke(
-                        Color.white.opacity(session.isRoutePaused ? 0.25 : 0.75),
-                        style: StrokeStyle(
-                            lineWidth: max(2, session.pathWidth.width * 0.45),
-                            lineCap: .round,
-                            lineJoin: .round,
-                            dash: [8, 12],
-                            dashPhase: pathDashPhase
+            ForEach(Array(compSegments.enumerated()), id: \.offset) { _, segment in
+                if segment.count > 1 {
+                    MapPolyline(coordinates: segment)
+                        .stroke(
+                            routeMethod == .freehand ? LocusTheme.accentSecondary.opacity(0.3) : LocusTheme.accent.opacity(0.3),
+                            style: StrokeStyle(lineWidth: max(3, session.pathWidth.width - 1.5), lineCap: .round, lineJoin: .round, dash: [6, 4])
                         )
-                    )
+                }
             }
-        } else if displayRouteCoordinates.count > 1 {
-            MapPolyline(coordinates: displayRouteCoordinates)
-                .stroke(
-                    (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.25),
-                    style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
-                )
 
-            MapPolyline(coordinates: displayRouteCoordinates)
-                .stroke(
-                    routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
-                    style: StrokeStyle(
-                        lineWidth: session.pathWidth.width,
-                        lineCap: .round,
-                        lineJoin: .round
-                    )
-                )
+            ForEach(Array(remSegments.enumerated()), id: \.offset) { _, segment in
+                if segment.count > 1 {
+                    MapPolyline(coordinates: segment)
+                        .stroke(
+                            (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.35),
+                            style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
+                        )
+
+                    MapPolyline(coordinates: segment)
+                        .stroke(
+                            routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
+                            style: StrokeStyle(lineWidth: session.pathWidth.width, lineCap: .round, lineJoin: .round)
+                        )
+
+                    MapPolyline(coordinates: segment)
+                        .stroke(
+                            Color.white.opacity(session.isRoutePaused ? 0.25 : 0.75),
+                            style: StrokeStyle(
+                                lineWidth: max(2, session.pathWidth.width * 0.45),
+                                lineCap: .round,
+                                lineJoin: .round,
+                                dash: [8, 12],
+                                dashPhase: pathDashPhase
+                            )
+                        )
+                }
+            }
+        } else if displayRouteSegments.contains(where: { $0.count > 1 }) {
+            ForEach(Array(displayRouteSegments.enumerated()), id: \.offset) { _, segment in
+                if segment.count > 1 {
+                    MapPolyline(coordinates: segment)
+                        .stroke(
+                            (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.25),
+                            style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
+                        )
+
+                    MapPolyline(coordinates: segment)
+                        .stroke(
+                            routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
+                            style: StrokeStyle(
+                                lineWidth: session.pathWidth.width,
+                                lineCap: .round,
+                                lineJoin: .round
+                            )
+                        )
+                }
+            }
         }
 
         if routeModeActive && routeMethod == .freehand && freehandCoordinates.count > 1 && calculatedRoute.isEmpty {
@@ -1197,14 +1301,32 @@ struct MapHomeView: View {
     }
 
     private func importGPX(_ url: URL) {
+        routingTask?.cancel()
+        routingTask = nil
+        isRouting = false
         do {
             let track = try GPXCodec.parseTrack(url)
-            importedGPXTrack = track
-            calculatedRoute = RouteBuilder.sample(coordinates: track.coordinates, every: 10)
+            let sampledTrack = RouteBuilder.sample(track: track, every: 10)
+            let segments = sampledTrack.coordinateSegments
+            let flat = sampledTrack.coordinates
+            guard !flat.isEmpty else {
+                session.lastError = GPXError.noTrackPoints.localizedDescription
+                return
+            }
+            importedGPXTrack = sampledTrack
+            routeSegments = segments
+            calculatedRoute = flat
+            waypoints = []
+            freehandCoordinates = []
+            routeMethod = .points
             routeModeActive = true
-            if let first = track.coordinates.first {
+            if let first = flat.first {
                 session.pin = first
-                position = .region(MKCoordinateRegion(center: first, latitudinalMeters: 2000, longitudinalMeters: 2000))
+            }
+            if let region = MKCoordinateRegion.framing(flat) {
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    position = .region(region)
+                }
             }
         } catch {
             session.lastError = error.localizedDescription
@@ -1213,23 +1335,42 @@ struct MapHomeView: View {
 
     private func exportGPX() {
         let gpx: String
+        let rawName: String
         if let track = importedGPXTrack, !track.isEmpty {
             gpx = GPXCodec.export(track)
+            rawName = track.name?.isEmpty == false ? track.name! : "Locus-Route"
         } else {
-            let path = displayRouteCoordinates
-            guard !path.isEmpty else {
+            let segs = displayRouteSegments
+            guard segs.contains(where: { !$0.isEmpty }) else {
                 session.lastError = "Nothing to export."
                 return
             }
-            gpx = GPXCodec.export(path)
+            let suggested = SavedRoute.suggestedName(
+                waypoints: waypoints,
+                method: routeMethod,
+                distance: RouteBuilder.totalDistance(ofSegments: segs)
+            )
+            gpx = GPXCodec.export(coordinateSegments: segs, name: suggested)
+            rawName = suggested
         }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Locus-Route.gpx")
+        let safeName = rawName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileName = safeName.isEmpty ? "Locus-Route" : safeName
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(fileName).gpx")
         do {
-            try gpx.data(using: .utf8)?.write(to: url)
+            guard let data = gpx.data(using: .utf8) else { return }
+            try data.write(to: url, options: .atomic)
             let av = UIActivityViewController(activityItems: [url], applicationActivities: nil)
             if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-               let root = scene.keyWindow?.rootViewController {
-                root.present(av, animated: true)
+               let presenter = scene.topMostViewController {
+                if let popover = av.popoverPresentationController {
+                    popover.sourceView = presenter.view
+                    popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1, height: 1)
+                    popover.permittedArrowDirections = []
+                }
+                presenter.present(av, animated: true)
             }
         } catch {
             session.lastError = error.localizedDescription
@@ -1239,6 +1380,14 @@ struct MapHomeView: View {
 
 private extension UIWindowScene {
     var keyWindow: UIWindow? { windows.first { $0.isKeyWindow } }
+
+    var topMostViewController: UIViewController? {
+        var current = keyWindow?.rootViewController
+        while let presented = current?.presentedViewController {
+            current = presented
+        }
+        return current
+    }
 }
 
 @MainActor

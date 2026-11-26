@@ -91,4 +91,56 @@ final class RouteSimulationEngineTests: XCTestCase {
         let engineOver = RouteSimulationEngine(speedVarianceRangeMPH: 9.0)
         XCTAssertEqual(engineOver.speedVarianceRangeMPH, 5.0)
     }
+
+    func testInvalidAndNonFiniteCoordinatesSafelyHandled() {
+        let nanCoord = CLLocationCoordinate2D(latitude: .nan, longitude: -122.0)
+        let infCoord = CLLocationCoordinate2D(latitude: 37.0, longitude: .infinity)
+        let outOfRange = CLLocationCoordinate2D(latitude: 95.0, longitude: 200.0)
+        let valid = CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194)
+
+        XCTAssertFalse(RouteSimulationEngine.isValidCoordinate(nanCoord))
+        XCTAssertFalse(RouteSimulationEngine.isValidCoordinate(infCoord))
+        XCTAssertFalse(RouteSimulationEngine.isValidCoordinate(outOfRange))
+        XCTAssertTrue(RouteSimulationEngine.isValidCoordinate(valid))
+
+        XCTAssertEqual(RouteSimulationEngine.haversineDistance(from: nanCoord, to: valid), 0.0)
+        XCTAssertEqual(RouteSimulationEngine.greatCircleBearing(from: infCoord, to: valid), 0.0)
+
+        let slerp = RouteSimulationEngine.interpolateGreatCircle(from: valid, to: nanCoord, fraction: .nan)
+        XCTAssertTrue(RouteSimulationEngine.isValidCoordinate(slerp))
+
+        let engine = RouteSimulationEngine(speedVarianceRangeMPH: .nan)
+        let speed = engine.computeNextSpeed(baseSpeedMPS: .nan, travelMode: .drive, turnAngleDegrees: .infinity, elapsedSeconds: .nan)
+        XCTAssertTrue(speed.isFinite && speed > 0)
+
+        let payload = engine.generateTelemetryPayload(rawCoordinate: valid, headingDegrees: .nan, speedMPS: .infinity, travelMode: .drive)
+        XCTAssertTrue(RouteSimulationEngine.isValidCoordinate(payload.coordinate))
+        XCTAssertTrue(payload.speedMPS.isFinite && payload.speedMPS > 0)
+        XCTAssertTrue(payload.courseDegrees.isFinite)
+    }
+
+    func testHighLatitudeAndAntimeridianOffsetWrapping() {
+        // High latitude (65°N): East offset must cover exact geodesic meters without cos(lat) distortion
+        let highLat = CLLocationCoordinate2D(latitude: 65.0, longitude: 10.0)
+        let movedEast = RouteSimulationEngine.offsetCoordinate(highLat, eastMeters: 500.0, northMeters: 0.0)
+        let dist = RouteSimulationEngine.haversineDistance(from: highLat, to: movedEast)
+        XCTAssertEqual(dist, 500.0, accuracy: 1.5)
+
+        // Antimeridian crossing: +179.999° + East offset wraps cleanly to negative longitude
+        let dateLine = CLLocationCoordinate2D(latitude: 0.0, longitude: 179.999)
+        let crossed = RouteSimulationEngine.offsetCoordinate(dateLine, eastMeters: 500.0, northMeters: 0.0)
+        XCTAssertLessThan(crossed.longitude, 0.0)
+        XCTAssertGreaterThan(crossed.longitude, -180.0)
+
+        // Polar safety: must never divide by zero or produce NaN near +/-90°
+        let pole = CLLocationCoordinate2D(latitude: 89.99999, longitude: 0.0)
+        let nearPole = RouteSimulationEngine.offsetCoordinate(pole, eastMeters: 200.0, northMeters: 100.0)
+        XCTAssertTrue(RouteSimulationEngine.isValidCoordinate(nearPole))
+
+        // Antipodal slerp safety: must never divide by sin(pi) == 0
+        let a = CLLocationCoordinate2D(latitude: 0.0, longitude: 0.0)
+        let b = CLLocationCoordinate2D(latitude: 0.0, longitude: 180.0)
+        let antipodalMid = RouteSimulationEngine.interpolateGreatCircle(from: a, to: b, fraction: 0.5)
+        XCTAssertTrue(RouteSimulationEngine.isValidCoordinate(antipodalMid))
+    }
 }

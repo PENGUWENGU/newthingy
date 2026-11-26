@@ -3,7 +3,14 @@ import Foundation
 
 final class BackgroundKeepAlive: NSObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
-    private(set) var lastKnownCoordinate: CLLocationCoordinate2D?
+    private let lock = NSLock()
+    private var _lastKnownCoordinate: CLLocationCoordinate2D?
+
+    var lastKnownCoordinate: CLLocationCoordinate2D? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _lastKnownCoordinate
+    }
 
     override init() {
         super.init()
@@ -26,6 +33,11 @@ final class BackgroundKeepAlive: NSObject, CLLocationManagerDelegate {
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        lastKnownCoordinate = locations.last?.coordinate
+        guard let latest = locations.last,
+              latest.horizontalAccuracy >= 0,
+              RouteSimulationEngine.isValidCoordinate(latest.coordinate) else { return }
+        lock.lock()
+        _lastKnownCoordinate = latest.coordinate
+        lock.unlock()
     }
 }

@@ -46,10 +46,10 @@ final class PairableHostAdvertiser {
                 txtRecord: txt
             )
 
-            listener.stateUpdateHandler = { [weak self] state in
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
                 switch state {
                 case .ready:
-                    let p = listener.port?.rawValue ?? 0
+                    let p = listener?.port?.rawValue ?? 0
                     self?.publishedPort = p
                     NSLog("[Locus] NWListener ready on port %u (relay → 127.0.0.1:%u)", p, port)
                 case .failed(let error):
@@ -153,7 +153,8 @@ private final class RelayPipe {
                 return
             }
             if let data, !data.isEmpty {
-                to.send(content: data, completion: .contentProcessed { sendError in
+                to.send(content: data, completion: .contentProcessed { [weak self] sendError in
+                    guard let self else { return }
                     if let sendError {
                         NSLog("[Locus] relay send error: %@", String(describing: sendError))
                         self.cancel()

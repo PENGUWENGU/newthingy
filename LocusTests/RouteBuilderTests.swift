@@ -110,4 +110,78 @@ final class RouteBuilderTests: XCTestCase {
         RouteConnectionPreference.defaultType = .road
         XCTAssertEqual(RouteConnectionPreference.defaultType, .road)
     }
+
+    // MARK: - Validation, Deduplication & Multi-Segment Safety
+
+    func testInvalidSpacingAndNonFiniteInputsDoNotCrash() {
+        let p1 = CLLocationCoordinate2D(latitude: 37.3300, longitude: -122.0300)
+        let p2 = CLLocationCoordinate2D(latitude: 37.3400, longitude: -122.0300)
+
+        XCTAssertEqual(RouteBuilder.sample(coordinates: [p1, p2], every: 0).count, 2)
+        XCTAssertEqual(RouteBuilder.sample(coordinates: [p1, p2], every: -50).count, 2)
+        XCTAssertEqual(RouteBuilder.sample(coordinates: [p1, p2], every: .nan).count, 2)
+        XCTAssertEqual(RouteBuilder.sample(coordinates: [p1, p2], every: .infinity).count, 2)
+
+        // Tiny spacing across continent must safely cap steps without Int overflow
+        let london = CLLocationCoordinate2D(latitude: 51.5074, longitude: -0.1278)
+        let tokyo = CLLocationCoordinate2D(latitude: 35.6762, longitude: 139.6503)
+        let capped = RouteBuilder.sample(coordinates: [london, tokyo], every: 1e-12)
+        XCTAssertGreaterThan(capped.count, 2)
+        XCTAssertLessThanOrEqual(capped.count, 50_005)
+
+        // Non-finite coordinates must be filtered safely
+        let bad = CLLocationCoordinate2D(latitude: .nan, longitude: .infinity)
+        XCTAssertEqual(RouteBuilder.totalDistance(of: [p1, bad, p2]), RouteBuilder.totalDistance(of: [p1, p2]), accuracy: 1e-6)
+        XCTAssertEqual(RouteBuilder.formattedDistance(.nan), "0 m")
+        XCTAssertEqual(RouteBuilder.estimatedDuration(distance: .infinity, speed: 5.0), 0)
+        XCTAssertEqual(RouteBuilder.formattedDuration(.nan), "0s")
+        XCTAssertEqual(RouteBuilder.formattedETA(.infinity), "< 1m")
+    }
+
+    func testSamplingEliminatesDuplicates() {
+        let p1 = CLLocationCoordinate2D(latitude: 37.3300, longitude: -122.0300)
+        let p2 = CLLocationCoordinate2D(latitude: 37.3305, longitude: -122.0300)
+        let sampled = RouteBuilder.sample(coordinates: [p1, p1, p1, p2, p2], every: 20)
+        XCTAssertGreaterThanOrEqual(sampled.count, 2)
+        for (a, b) in zip(sampled, sampled.dropFirst()) {
+            XCTAssertGreaterThan(RouteSimulationEngine.haversineDistance(from: a, to: b), 1e-4)
+        }
+    }
+
+    func testMultiSegmentSamplingDoesNotConnectDisjointSegments() {
+        let segA = [
+            CLLocationCoordinate2D(latitude: 37.000, longitude: -122.000),
+            CLLocationCoordinate2D(latitude: 37.001, longitude: -122.000)
+        ]
+        let segB = [
+            CLLocationCoordinate2D(latitude: 38.000, longitude: -121.000),
+            CLLocationCoordinate2D(latitude: 38.001, longitude: -121.000)
+        ]
+        let track = GPXTrack(
+            name: "Split",
+            segments: [
+                segA.map { GPXTrackPoint(coordinate: $0) },
+                segB.map { GPXTrackPoint(coordinate: $0) }
+            ]
+        )
+        let sampledTrack = RouteBuilder.sample(track: track, every: 10)
+        XCTAssertEqual(sampledTrack.name, "Split")
+        XCTAssertEqual(sampledTrack.segments.count, 2)
+
+        // Segment-aware total distance must only reflect the two ~111m legs, not the 140km jump!
+        let segmentedDistance = RouteBuilder.totalDistance(of: sampledTrack)
+        XCTAssertEqual(segmentedDistance, 222.4, accuracy: 5.0)
+    }
+
+    func testSidewalkOffsetPerpendicularAtHighLatitude() {
+        let p0 = CLLocationCoordinate2D(latitude: 65.0000, longitude: 10.0000)
+        let p1 = RouteSimulationEngine.offsetCoordinate(p0, eastMeters: 0, northMeters: 50)
+        // Includes duplicate middle vertex to verify lookahead heading recovery
+        let shifted = RouteBuilder.applySidewalkOffset(coordinates: [p0, p0, p1], offsetMeters: 3.2)
+        XCTAssertEqual(shifted.count, 3)
+        // Going due North, right-hand sidewalk must shift due East by 3.2m even at 65°N
+        XCTAssertEqual(RouteSimulationEngine.haversineDistance(from: p0, to: shifted[0]), 3.2, accuracy: 0.25)
+        XCTAssertGreaterThan(shifted[0].longitude, p0.longitude)
+        XCTAssertEqual(shifted[0].latitude, p0.latitude, accuracy: 1e-6)
+    }
 }

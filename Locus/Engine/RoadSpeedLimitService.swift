@@ -78,7 +78,11 @@ final class RoadSpeedLimitService: ObservableObject {
         }
     }
 
+    private var fetchGeneration: UInt64 = 0
+    private let maxCacheEntries = 500
+
     private func performFetch(at coordinate: CLLocationCoordinate2D, force: Bool) {
+        guard RouteSimulationEngine.isValidCoordinate(coordinate) else { return }
         let key = cacheKey(for: coordinate)
 
         // 1. Check in-memory cache
@@ -94,6 +98,8 @@ final class RoadSpeedLimitService: ObservableObject {
             return
         }
 
+        fetchGeneration &+= 1
+        let gen = fetchGeneration
         activeTask?.cancel()
         activeTask = Task { [weak self] in
             guard let self else { return }
@@ -101,12 +107,22 @@ final class RoadSpeedLimitService: ObservableObject {
             self.lastFetchTime = Date()
             self.lastQueriedCoordinate = coordinate
 
-            let info = await self.performLookup(coordinate: coordinate)
-            if !Task.isCancelled {
-                self.cache[key] = info
-                self.currentRoadSpeed = info
-                self.isFetching = false
+            let result = await self.performLookup(coordinate: coordinate)
+            guard !Task.isCancelled, self.fetchGeneration == gen else {
+                if self.fetchGeneration == gen {
+                    self.isFetching = false
+                }
+                return
             }
+
+            if result.isFromRemote {
+                if self.cache.count >= self.maxCacheEntries {
+                    self.cache.removeAll(keepingCapacity: true)
+                }
+                self.cache[key] = result.info
+            }
+            self.currentRoadSpeed = result.info
+            self.isFetching = false
         }
     }
 
@@ -118,13 +134,13 @@ final class RoadSpeedLimitService: ObservableObject {
 
     // MARK: - Remote Lookup with OSM Nominatim
 
-    private func performLookup(coordinate: CLLocationCoordinate2D) async -> RoadSpeedInfo {
+    private func performLookup(coordinate: CLLocationCoordinate2D) async -> (info: RoadSpeedInfo, isFromRemote: Bool) {
         if let result = await fetchFromNominatim(coordinate: coordinate) {
-            return result
+            return (result, true)
         }
 
-        // Fallback: Default reasonable city road speed if offline or unreachable
-        return RoadSpeedInfo(
+        // Fallback: Default reasonable city road speed if offline or unreachable (not persisted in cache)
+        return (RoadSpeedInfo(
             speedLimitMPS: 11.176, // 25 mph
             speedLimitMPH: 25.0,
             speedLimitKMH: 40.0,
@@ -132,7 +148,7 @@ final class RoadSpeedLimitService: ObservableObject {
             roadType: "residential",
             isExplicit: false,
             timestamp: Date()
-        )
+        ), false)
     }
 
     private func fetchFromNominatim(coordinate: CLLocationCoordinate2D) async -> RoadSpeedInfo? {

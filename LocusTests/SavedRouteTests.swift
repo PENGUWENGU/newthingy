@@ -147,4 +147,46 @@ final class SavedRouteTests: XCTestCase {
         XCTAssertEqual(TravelMode.sidewalk.icon, "figure.walk.motion")
         XCTAssertEqual(TravelMode.bus.icon, "bus.fill")
     }
+
+    func testSavedRouteMultiSegmentAndLegacyJSONCompatibility() throws {
+        let seg1 = [
+            CLLocationCoordinate2D(latitude: 37.1, longitude: -122.1),
+            CLLocationCoordinate2D(latitude: 37.2, longitude: -122.2)
+        ]
+        let seg2 = [
+            CLLocationCoordinate2D(latitude: 38.1, longitude: -121.1),
+            CLLocationCoordinate2D(latitude: 38.2, longitude: -121.2)
+        ]
+
+        let multi = SavedRoute(
+            name: "Split GPX",
+            method: .points,
+            coordinates: seg1 + seg2,
+            coordinateSegments: [seg1, seg2],
+            distanceMeters: 20_000
+        )
+
+        let data = try JSONEncoder().encode(multi)
+        let decoded = try JSONDecoder().decode(SavedRoute.self, from: data)
+        XCTAssertEqual(decoded.clCoordinateSegments.count, 2)
+        XCTAssertEqual(decoded.clCoordinates.count, 4)
+
+        // Verify legacy JSON without coordinateSegments decodes cleanly
+        let legacyJSON = """
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "name": "Legacy",
+          "createdAt": 700000000,
+          "methodRaw": "Points",
+          "connectionTypeRaw": "Roads",
+          "waypoints": [],
+          "coordinates": [{"latitude": 37.0, "longitude": -122.0}, {"latitude": 37.1, "longitude": -122.1}],
+          "distanceMeters": 14000,
+          "isLoop": false
+        }
+        """
+        let decodedLegacy = try JSONDecoder().decode(SavedRoute.self, from: Data(legacyJSON.utf8))
+        XCTAssertEqual(decodedLegacy.clCoordinates.count, 2)
+        XCTAssertEqual(decodedLegacy.clCoordinateSegments.count, 1)
+    }
 }

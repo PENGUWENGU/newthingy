@@ -11,9 +11,13 @@ final class LiveActivityManager {
     #if canImport(ActivityKit)
     private var currentRouteActivity: Activity<LocusRouteActivityAttributes>?
     private var currentSpoofActivity: Activity<LocusSpoofActivityAttributes>?
+    private var startRouteTask: Task<Void, Never>?
+    private var startSpoofTask: Task<Void, Never>?
     #endif
 
     private(set) var isRouteActive: Bool = false
+    private var routeActivityGeneration: UInt64 = 0
+    private var spoofActivityGeneration: UInt64 = 0
     private var spoofStartDate: Date = Date()
 
     private init() {}
@@ -43,6 +47,9 @@ final class LiveActivityManager {
         guard #available(iOS 16.1, *) else { return }
 
         isRouteActive = true
+        routeActivityGeneration &+= 1
+        let gen = routeActivityGeneration
+        startRouteTask?.cancel()
 
         // Route activity takes full precedence: end any active spoof activity immediately
         endSpoofActivity()
@@ -50,14 +57,16 @@ final class LiveActivityManager {
         let oldActivity = self.currentRouteActivity
         self.currentRouteActivity = nil
 
-        let eta = Date().addingTimeInterval(initialRemainingSeconds)
+        let safeRemaining = initialRemainingSeconds.isFinite ? max(0.0, initialRemainingSeconds) : 0.0
+        let safeDistance = routeDistanceMeters.isFinite ? max(0.0, routeDistanceMeters) : 0.0
+        let eta = Date().addingTimeInterval(safeRemaining)
         let formatter = DateFormatter()
         formatter.dateFormat = "h:mm a"
         let arrivalStr = "Arrive at " + formatter.string(from: eta)
 
-        let initialMinutes = max(1, Int(ceil(initialRemainingSeconds / 60.0)))
-        let durationStr = formatRemainingDuration(initialRemainingSeconds)
-        let distanceStr = formatDistance(routeDistanceMeters)
+        let initialMinutes = max(1, Int(ceil(min(86400.0 * 30.0, safeRemaining) / 60.0)))
+        let durationStr = formatRemainingDuration(safeRemaining)
+        let distanceStr = formatDistance(safeDistance)
         let countdownStr = "Go in \(initialMinutes) min\(initialMinutes == 1 ? "" : "s")"
         let accentHex = ThemePreference.accent.primaryColor.toHex()
 
@@ -84,20 +93,28 @@ final class LiveActivityManager {
             targetDestinationName: destinationName
         )
 
-        Task { @MainActor in
+        startRouteTask = Task { @MainActor [weak self] in
             if let oldActivity {
                 await oldActivity.end(nil, dismissalPolicy: .immediate)
             }
             for stale in Activity<LocusRouteActivityAttributes>.activities {
                 await stale.end(nil, dismissalPolicy: .immediate)
             }
+            guard let self,
+                  !Task.isCancelled,
+                  self.isRouteActive,
+                  self.routeActivityGeneration == gen else { return }
             do {
                 let activity = try Activity<LocusRouteActivityAttributes>.request(
                     attributes: attributes,
                     content: .init(state: state, staleDate: Date().addingTimeInterval(3600)),
                     pushType: nil
                 )
-                self.currentRouteActivity = activity
+                if self.routeActivityGeneration != gen || !self.isRouteActive || Task.isCancelled {
+                    await activity.end(nil, dismissalPolicy: .immediate)
+                } else {
+                    self.currentRouteActivity = activity
+                }
             } catch {
                 print("[LiveActivityManager] Failed to start Route Live Activity: \(error.localizedDescription)")
             }
@@ -116,7 +133,7 @@ final class LiveActivityManager {
         isPaused: Bool = false
     ) {
         #if canImport(ActivityKit)
-        guard #available(iOS 16.1, *) else { return }
+        guard #available(iOS 16.1, *), isRouteActive else { return }
         let resolvedActivity = currentRouteActivity
             ?? Activity<LocusRouteActivityAttributes>.activities.first
         guard let activity = resolvedActivity else { return }
@@ -124,14 +141,18 @@ final class LiveActivityManager {
             currentRouteActivity = activity
         }
 
-        let eta = Date().addingTimeInterval(remainingDurationSeconds)
+        let safeRemaining = remainingDurationSeconds.isFinite ? max(0.0, remainingDurationSeconds) : 0.0
+        let safeDistance = remainingDistanceMeters.isFinite ? max(0.0, remainingDistanceMeters) : 0.0
+        let safeProgress = progress.isFinite ? min(1.0, max(0.0, progress)) : 0.0
+
+        let eta = Date().addingTimeInterval(safeRemaining)
         let formatter = DateFormatter()
         formatter.dateFormat = "h:mm a"
         let arrivalStr = "Arrive at " + formatter.string(from: eta)
 
-        let minutesLeft = max(1, Int(ceil(remainingDurationSeconds / 60.0)))
-        let durationStr = formatRemainingDuration(remainingDurationSeconds)
-        let distanceStr = formatDistance(remainingDistanceMeters)
+        let minutesLeft = max(1, Int(ceil(min(86400.0 * 30.0, safeRemaining) / 60.0)))
+        let durationStr = formatRemainingDuration(safeRemaining)
+        let distanceStr = formatDistance(safeDistance)
         let accentHex = ThemePreference.accent.primaryColor.toHex()
 
         let title: String
@@ -153,7 +174,7 @@ final class LiveActivityManager {
             statusSubtitle: subtitle,
             badgeNumber: travelMode == .bus ? "234" : nil,
             badgeColorHex: travelMode == .bus ? "#FF9500" : accentHex,
-            progress: min(1.0, max(0.0, progress)),
+            progress: safeProgress,
             departureCountdownText: title,
             arrivalText: arrivalStr,
             remainingTimeText: durationStr,
@@ -175,6 +196,10 @@ final class LiveActivityManager {
         #if canImport(ActivityKit)
         guard #available(iOS 16.1, *) else { return }
         isRouteActive = false
+        routeActivityGeneration &+= 1
+        startRouteTask?.cancel()
+        startRouteTask = nil
+
         let activityToEnd = currentRouteActivity
             ?? Activity<LocusRouteActivityAttributes>.activities.first
         self.currentRouteActivity = nil
@@ -216,6 +241,10 @@ final class LiveActivityManager {
         // If route simulation is currently active, DO NOT start or override with spoof activity
         guard !isRouteActive else { return }
 
+        spoofActivityGeneration &+= 1
+        let gen = spoofActivityGeneration
+        startSpoofTask?.cancel()
+
         let coordStr = String(format: "%.4f°, %.4f°", coordinate.latitude, coordinate.longitude)
         let accentHex = ThemePreference.accent.primaryColor.toHex()
         let headline = isJoystick ? "Joystick Navigation" : "Location Spoofed"
@@ -242,17 +271,25 @@ final class LiveActivityManager {
 
         let attributes = LocusSpoofActivityAttributes()
 
-        Task { @MainActor in
+        startSpoofTask = Task { @MainActor [weak self] in
             for stale in Activity<LocusSpoofActivityAttributes>.activities {
                 await stale.end(nil, dismissalPolicy: .immediate)
             }
+            guard let self,
+                  !Task.isCancelled,
+                  !self.isRouteActive,
+                  self.spoofActivityGeneration == gen else { return }
             do {
                 let activity = try Activity<LocusSpoofActivityAttributes>.request(
                     attributes: attributes,
                     content: .init(state: state, staleDate: Date().addingTimeInterval(7200)),
                     pushType: nil
                 )
-                self.currentSpoofActivity = activity
+                if self.spoofActivityGeneration != gen || self.isRouteActive || Task.isCancelled {
+                    await activity.end(nil, dismissalPolicy: .immediate)
+                } else {
+                    self.currentSpoofActivity = activity
+                }
             } catch {
                 print("[LiveActivityManager] Failed to start Spoof Live Activity: \(error.localizedDescription)")
             }
@@ -301,6 +338,10 @@ final class LiveActivityManager {
     func endSpoofActivity() {
         #if canImport(ActivityKit)
         guard #available(iOS 16.1, *) else { return }
+        spoofActivityGeneration &+= 1
+        startSpoofTask?.cancel()
+        startSpoofTask = nil
+
         let activityToEnd = currentSpoofActivity ?? Activity<LocusSpoofActivityAttributes>.activities.first
         self.currentSpoofActivity = nil
         guard let activity = activityToEnd else { return }
@@ -314,6 +355,13 @@ final class LiveActivityManager {
         #if canImport(ActivityKit)
         guard #available(iOS 16.1, *) else { return }
         isRouteActive = false
+        routeActivityGeneration &+= 1
+        spoofActivityGeneration &+= 1
+        startRouteTask?.cancel()
+        startRouteTask = nil
+        startSpoofTask?.cancel()
+        startSpoofTask = nil
+
         let rActivity = currentRouteActivity ?? Activity<LocusRouteActivityAttributes>.activities.first
         currentRouteActivity = nil
         let sActivity = currentSpoofActivity ?? Activity<LocusSpoofActivityAttributes>.activities.first

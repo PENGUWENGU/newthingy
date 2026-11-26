@@ -20,7 +20,7 @@ struct RootView: View {
                                 session.updateJoystick(vector: vector)
                             },
                             onClose: {
-                                session.stopJoystick()
+                                session.stopJoystick(pairing: pairing)
                             }
                         )
                         .padding(.trailing, 18)
@@ -222,7 +222,7 @@ struct BottomControlsView: View {
 
                 Button {
                     if session.joystickActive {
-                        session.stopJoystick()
+                        session.stopJoystick(pairing: pairing)
                     } else {
                         session.startJoystick(pairing: pairing)
                     }

@@ -56,9 +56,15 @@ enum LocationEngine {
     private static let locationSet: Int32 = 11
     private static let locationClear: Int32 = 12
 
-    static var isSessionActive: Bool { locationSimulation != nil }
+    static var isSessionActive: Bool {
+        queue.sync { locationSimulation != nil }
+    }
 
     static func set(latitude: Double, longitude: Double, pairingPath: String, deviceIP: String) -> Result<Void, LocationEngineError> {
+        guard latitude.isFinite, longitude.isFinite,
+              (-90.0...90.0).contains(latitude), (-180.0...180.0).contains(longitude) else {
+            return .failure(.locationSet)
+        }
         var result: Result<Void, LocationEngineError> = .failure(.locationSet)
         queue.sync {
             let code = setLocked(latitude: latitude, longitude: longitude, pairingPath: pairingPath, deviceIP: deviceIP)
@@ -96,6 +102,10 @@ enum LocationEngine {
     }
 
     private static func setLocked(latitude: Double, longitude: Double, pairingPath: String, deviceIP: String) -> Int32 {
+        guard latitude.isFinite, longitude.isFinite,
+              (-90.0...90.0).contains(latitude), (-180.0...180.0).contains(longitude) else {
+            return locationSet
+        }
         if let locationSimulation {
             if let err = location_simulation_set(locationSimulation, latitude, longitude) {
                 idevice_error_free(err)

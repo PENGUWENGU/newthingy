@@ -7,6 +7,7 @@ struct RoutePlannerSheet: View {
     @Binding var waypoints: [RouteWaypoint]
     @Binding var freehandCoordinates: [CLLocationCoordinate2D]
     @Binding var calculatedRoute: [CLLocationCoordinate2D]
+    @Binding var routeSegments: [[CLLocationCoordinate2D]]
     @Binding var isRouting: Bool
     @Binding var loopRoute: Bool
 
@@ -47,8 +48,16 @@ struct RoutePlannerSheet: View {
         }
     }
 
+    private var activeSegments: [[CLLocationCoordinate2D]] {
+        if routeSegments.count > 1 {
+            return routeSegments
+        }
+        let flat = activePath
+        return flat.isEmpty ? [] : [flat]
+    }
+
     private var totalDistance: CLLocationDistance {
-        RouteBuilder.totalDistance(of: activePath)
+        RouteBuilder.totalDistance(ofSegments: activeSegments)
     }
 
     private var totalStopsDuration: TimeInterval {
@@ -149,10 +158,12 @@ struct RoutePlannerSheet: View {
                             .onMove { indices, newOffset in
                                 waypoints.move(fromOffsets: indices, toOffset: newOffset)
                                 calculatedRoute.removeAll()
+                                routeSegments.removeAll()
                             }
                             .onDelete { indices in
                                 waypoints.remove(atOffsets: indices)
                                 calculatedRoute.removeAll()
+                                routeSegments.removeAll()
                             }
 
                             if waypoints.count >= 2 {
@@ -160,6 +171,7 @@ struct RoutePlannerSheet: View {
                                     Button {
                                         waypoints.reverse()
                                         calculatedRoute.removeAll()
+                                        routeSegments.removeAll()
                                     } label: {
                                         Label("Reverse", systemImage: "arrow.up.arrow.down")
                                             .font(.footnote)
@@ -172,6 +184,7 @@ struct RoutePlannerSheet: View {
                                            (first.coordinate.latitude != last.coordinate.latitude || first.coordinate.longitude != last.coordinate.longitude) {
                                             waypoints.append(RouteWaypoint(coordinate: first.coordinate, name: "Return to Start"))
                                             calculatedRoute.removeAll()
+                                            routeSegments.removeAll()
                                         }
                                     } label: {
                                         Label("Loop to Start", systemImage: "arrow.triangle.2.circlepath")
@@ -238,6 +251,7 @@ struct RoutePlannerSheet: View {
                                     if let first = freehandCoordinates.first, let last = freehandCoordinates.last,
                                        (first.latitude != last.latitude || first.longitude != last.longitude) {
                                         freehandCoordinates.append(first)
+                                        routeSegments.removeAll()
                                         onSmoothFreehand()
                                     }
                                 } label: {
@@ -292,6 +306,34 @@ struct RoutePlannerSheet: View {
                             }
                             .padding(.vertical, 4)
                         }
+                    }
+                }
+
+                // MARK: - GPX Track Import & Export
+                Section("GPX Tracks") {
+                    HStack(spacing: 10) {
+                        Button {
+                            SoundManager.play(.tap)
+                            onImportGPX()
+                        } label: {
+                            Label("Import GPX", systemImage: "square.and.arrow.down")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button {
+                            SoundManager.play(.tap)
+                            onExportGPX()
+                        } label: {
+                            Label("Export GPX", systemImage: "square.and.arrow.up")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(activePath.count < 2)
                     }
                 }
 
@@ -667,12 +709,14 @@ struct RoutePlannerSheet: View {
     }
 
     private func saveCurrentRoute() {
+        let segs = activeSegments
         let route = SavedRoute(
             name: saveRouteNameText,
             method: method,
             connectionType: connectionType,
             waypoints: waypoints,
             coordinates: activePath,
+            coordinateSegments: segs.count > 1 ? segs : nil,
             distanceMeters: totalDistance,
             isLoop: loopRoute
         )
@@ -688,15 +732,31 @@ struct RoutePlannerSheet: View {
     }
 
     private func exportSavedRouteGPX(_ route: SavedRoute) {
-        let gpx = GPXCodec.export(route.clCoordinates)
-        let safeName = route.name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        let segs = route.clCoordinateSegments
+        let gpx = GPXCodec.export(coordinateSegments: segs, name: route.name)
+        let rawName = route.name
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeName = rawName.isEmpty ? "Locus-Route" : rawName
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safeName).gpx")
         do {
-            try gpx.data(using: .utf8)?.write(to: url)
+            guard let data = gpx.data(using: .utf8) else { return }
+            try data.write(to: url, options: .atomic)
             let av = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-            if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-               let root = scene.keyWindow?.rootViewController {
-                root.present(av, animated: true)
+            if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+                var presenter = scene.windows.first { $0.isKeyWindow }?.rootViewController
+                while let next = presenter?.presentedViewController {
+                    presenter = next
+                }
+                if let presenter {
+                    if let popover = av.popoverPresentationController {
+                        popover.sourceView = presenter.view
+                        popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1, height: 1)
+                        popover.permittedArrowDirections = []
+                    }
+                    presenter.present(av, animated: true)
+                }
             }
         } catch {
             session.lastError = error.localizedDescription

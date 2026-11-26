@@ -79,6 +79,8 @@ final class SpoofSession: ObservableObject {
     @Published var remainingRouteDuration: TimeInterval = 0.0
     @Published var completedRouteCoordinates: [CLLocationCoordinate2D] = []
     @Published var remainingRouteCoordinates: [CLLocationCoordinate2D] = []
+    @Published var completedRouteSegments: [[CLLocationCoordinate2D]] = []
+    @Published var remainingRouteSegments: [[CLLocationCoordinate2D]] = []
     @Published var activeStopName: String? = nil
     @Published var activeStopRemainingSeconds: Double? = nil
     @Published var isTrafficLightStopActive: Bool = false
@@ -177,6 +179,8 @@ final class SpoofSession: ObservableObject {
     private let locationKeeper = BackgroundKeepAlive()
     private let audioKeeper = SilentAudioKeepAlive()
     private let simulationEngine = RouteSimulationEngine()
+    private let routeSessionController = RoutePlaybackSessionController()
+    private let sessionResources = NonisolatedSessionResources()
     private var skipCurrentStopRequested = false
     private var smoothedVelocityMPS: Double = 0.0
     private var cumulativeDriftEast: Double = 0.0
@@ -457,6 +461,13 @@ final class SpoofSession: ObservableObject {
             lastError = "Import an RPPairing file in Settings first."
             return
         }
+        guard RouteSimulationEngine.isValidCoordinate(coordinate) else {
+            lastError = "Invalid coordinate."
+            return
+        }
+        if isFollowingRoute {
+            stopRoute(restoreStationaryActivity: false)
+        }
         pin = coordinate
         apply(coordinate, pairing: pairing, markRecent: true)
     }
@@ -471,41 +482,95 @@ final class SpoofSession: ObservableObject {
         if let mode = TravelMode(rawValue: snapshot.travelModeRaw) {
             travelMode = mode
         }
-        if snapshot.currentSpeedMPS > 0 {
+        if snapshot.currentSpeedMPS.isFinite && snapshot.currentSpeedMPS > 0 {
             setCustomSpeed(snapshot.currentSpeedMPS)
         }
 
-        if snapshot.sessionType == .route,
-           let coords = snapshot.routeCoordinates?.map({ $0.clCoordinate }),
-           coords.count >= 2 {
-            let segIdx = min(coords.count - 1, max(0, snapshot.currentSegmentIndex ?? 0))
-            let resumeCoord = snapshot.lastCoordinate.clCoordinate
+        let resumeCoord = snapshot.lastCoordinate.clCoordinate
+        guard RouteSimulationEngine.isValidCoordinate(resumeCoord) else {
+            lastError = "Saved recovery coordinate was invalid."
+            return
+        }
 
-            var remainingCoords: [CLLocationCoordinate2D] = [resumeCoord]
-            if segIdx + 1 < coords.count {
-                remainingCoords.append(contentsOf: coords[(segIdx + 1)...])
-            } else if let last = coords.last, (abs(last.latitude - resumeCoord.latitude) > 0.00001 || abs(last.longitude - resumeCoord.longitude) > 0.00001) {
-                remainingCoords.append(last)
-            } else {
-                remainingCoords.append(coords[segIdx])
+        if snapshot.sessionType == .route {
+            let waypoints: [RouteWaypoint] = (snapshot.routeWaypoints ?? []).map(\.routeWaypoint)
+            if let rawSegments = snapshot.routeCoordinateSegments?.map({ $0.map(\.clCoordinate) }),
+               !rawSegments.isEmpty {
+                var trimmedSegments = rawSegments.map { $0.filter { RouteSimulationEngine.isValidCoordinate($0) } }.filter { !$0.isEmpty }
+                if !trimmedSegments.isEmpty {
+                    // Preserve multi-segment structure while resuming near the last coordinate
+                    let targetIdx = min(max(0, snapshot.currentSegmentIndex ?? 0), max(0, trimmedSegments.flatMap { $0 }.count - 1))
+                    var flatOffset = 0
+                    var resumeSegIdx = 0
+                    var resumeLocalIdx = 0
+                    for (sIdx, seg) in trimmedSegments.enumerated() {
+                        if targetIdx < flatOffset + seg.count {
+                            resumeSegIdx = sIdx
+                            resumeLocalIdx = targetIdx - flatOffset
+                            break
+                        }
+                        flatOffset += seg.count
+                    }
+                    var adjustedSegments: [[CLLocationCoordinate2D]] = []
+                    if resumeSegIdx < trimmedSegments.count {
+                        var firstSeg = [resumeCoord]
+                        let curSeg = trimmedSegments[resumeSegIdx]
+                        if resumeLocalIdx + 1 < curSeg.count {
+                            firstSeg.append(contentsOf: curSeg[(resumeLocalIdx + 1)...])
+                        } else if let segLast = curSeg.last,
+                                  RouteSimulationEngine.haversineDistance(from: resumeCoord, to: segLast) > 1.0 {
+                            firstSeg.append(segLast)
+                        }
+                        if firstSeg.count >= 2 {
+                            adjustedSegments.append(firstSeg)
+                        }
+                        if resumeSegIdx + 1 < trimmedSegments.count {
+                            adjustedSegments.append(contentsOf: trimmedSegments[(resumeSegIdx + 1)...])
+                        }
+                    }
+                    if !adjustedSegments.isEmpty {
+                        followRoute(
+                            segments: adjustedSegments,
+                            waypoints: waypoints,
+                            destinationName: snapshot.routeName ?? "Resumed Route",
+                            pairing: pairing,
+                            loop: snapshot.isLoop ?? false
+                        )
+                        return
+                    }
+                }
             }
 
-            let waypoints: [RouteWaypoint] = (snapshot.routeWaypoints ?? []).map(\.routeWaypoint)
+            if let coords = snapshot.routeCoordinates?.map({ $0.clCoordinate }).filter({ RouteSimulationEngine.isValidCoordinate($0) }),
+               coords.count >= 2 {
+                let segIdx = min(coords.count - 1, max(0, snapshot.currentSegmentIndex ?? 0))
 
-            followRoute(
-                remainingCoords,
-                waypoints: waypoints,
-                destinationName: snapshot.routeName ?? "Resumed Route",
-                pairing: pairing,
-                loop: snapshot.isLoop ?? false
-            )
-        } else {
-            teleport(to: snapshot.lastCoordinate.clCoordinate, pairing: pairing)
+                var remainingCoords: [CLLocationCoordinate2D] = [resumeCoord]
+                if segIdx + 1 < coords.count {
+                    remainingCoords.append(contentsOf: coords[(segIdx + 1)...])
+                } else if let last = coords.last,
+                          RouteSimulationEngine.haversineDistance(from: last, to: resumeCoord) > 1.0 {
+                    remainingCoords.append(last)
+                } else {
+                    remainingCoords.append(coords[segIdx])
+                }
+
+                followRoute(
+                    remainingCoords,
+                    waypoints: waypoints,
+                    destinationName: snapshot.routeName ?? "Resumed Route",
+                    pairing: pairing,
+                    loop: snapshot.isLoop ?? false
+                )
+                return
+            }
         }
+
+        teleport(to: resumeCoord, pairing: pairing)
     }
 
     func stop(pairing: PairingStore) {
-        stopRoute()
+        stopRoute(restoreStationaryActivity: false)
         stopJoystick()
         stopResend()
         stopHealth()
@@ -530,24 +595,22 @@ final class SpoofSession: ObservableObject {
         }
     }
 
-    func stopRoute() {
+    func stopRoute(restoreStationaryActivity: Bool = true) {
+        let prevDestination = routeDestinationName
+        _ = routeSessionController.stopActiveSession()
         routeTask?.cancel()
         routeTask = nil
+        sessionResources.setRouteTask(nil)
         CrashRecoveryManager.shared.clearSession()
-        isFollowingRoute = false
-        isRoutePaused = false
-        liveSpeedMPS = 0.0
-        routeProgress = 0.0
-        remainingRouteDistance = 0.0
-        remainingRouteDuration = 0.0
-        completedRouteCoordinates = []
-        remainingRouteCoordinates = []
-        activeStopName = nil
-        activeStopRemainingSeconds = nil
-        skipCurrentStopRequested = false
+
+        cleanupRouteUIState()
+
+        if restoreStationaryActivity, isSpoofing, !joystickActive {
+            // Will resume stationary resend if we stay spoofing after stopping a route
+        }
         if liveActivitiesEnabled {
-            LiveActivityManager.shared.endActivity(destinationName: routeDestinationName)
-            if isSpoofing, let sim = simulated {
+            LiveActivityManager.shared.endActivity(destinationName: prevDestination)
+            if restoreStationaryActivity, isSpoofing, let sim = simulated {
                 LiveActivityManager.shared.startSpoofActivity(
                     locationName: Self.coordinateLabel(sim),
                     coordinate: sim,
@@ -556,6 +619,24 @@ final class SpoofSession: ObservableObject {
                 )
             }
         }
+    }
+
+    private func cleanupRouteUIState() {
+        isFollowingRoute = false
+        isRoutePaused = false
+        liveSpeedMPS = 0.0
+        routeProgress = 0.0
+        remainingRouteDistance = 0.0
+        remainingRouteDuration = 0.0
+        completedRouteCoordinates = []
+        remainingRouteCoordinates = []
+        completedRouteSegments = []
+        remainingRouteSegments = []
+        activeStopName = nil
+        activeStopRemainingSeconds = nil
+        isTrafficLightStopActive = false
+        isBusStopActive = false
+        skipCurrentStopRequested = false
     }
 
     func pauseRoute() {
@@ -624,9 +705,9 @@ final class SpoofSession: ObservableObject {
             lastError = "Import an RPPairing file in Settings first."
             return
         }
-        stopRoute()
+        stopRoute(restoreStationaryActivity: false)
         let start = simulated ?? pin ?? locationKeeper.lastKnownCoordinate
-        guard let start else {
+        guard let start, RouteSimulationEngine.isValidCoordinate(start) else {
             lastError = "Drop a pin or teleport somewhere before using the joystick."
             return
         }
@@ -647,6 +728,7 @@ final class SpoofSession: ObservableObject {
         }
         RunLoop.main.add(timer, forMode: .common)
         joystickTimer = timer
+        sessionResources.setJoystickTimer(timer)
     }
 
     func updateJoystick(vector: CGVector) {
@@ -717,10 +799,43 @@ final class SpoofSession: ObservableObject {
         waypoints: [RouteWaypoint] = [],
         destinationName: String = "",
         pairing: PairingStore,
-        loop: Bool = false
+        loop: Bool = false,
+        startPaused: Bool = false
     ) {
-        guard pairing.hasPairingFile, coordinates.count >= 2 else { return }
+        followRoute(
+            segments: [coordinates],
+            waypoints: waypoints,
+            destinationName: destinationName,
+            pairing: pairing,
+            loop: loop,
+            startPaused: startPaused
+        )
+    }
+
+    func followRoute(
+        segments: [[CLLocationCoordinate2D]],
+        waypoints: [RouteWaypoint] = [],
+        destinationName: String = "",
+        pairing: PairingStore,
+        loop: Bool = false,
+        startPaused: Bool = false
+    ) {
+        guard pairing.hasPairingFile else { return }
+        let plan = RoutePlaybackPlan(coordinateSegments: segments)
+        guard let startCoord = plan.startCoordinate, plan.flattenedCoordinates.count >= 2 || plan.isPlayable else {
+            return
+        }
+
+        // Cancel any previously active route task & claim its single cleanup before spinning up the new session
         routeTask?.cancel()
+        routeTask = nil
+        sessionResources.setRouteTask(nil)
+
+        let (sessionID, previousNeedingCleanup) = routeSessionController.beginNewSession()
+        if previousNeedingCleanup != nil {
+            cleanupRouteUIState()
+        }
+
         stopJoystick()
         stopResend()
         audioKeeper.start()
@@ -728,7 +843,7 @@ final class SpoofSession: ObservableObject {
         beginBackground()
 
         isFollowingRoute = true
-        isRoutePaused = false
+        isRoutePaused = startPaused
         routeProgress = 0.0
         activeStopName = nil
         activeStopRemainingSeconds = nil
@@ -738,209 +853,182 @@ final class SpoofSession: ObservableObject {
         routeDestinationName = destinationName.isEmpty ? (waypoints.last?.name ?? "Destination") : destinationName
         activeRouteWaypoints = waypoints
 
-        // Immediately begin with cruising velocity for realistic motion detection
+        let totalRouteDistance = plan.totalDistance
+        let initialHeading = plan.edges.first?.bearingDegrees ?? 0.0
+        let initialSpeed = startPaused ? 0.0 : currentSpeedMPS
         smoothedVelocityMPS = currentSpeedMPS
-        liveSpeedMPS = currentSpeedMPS
-        simulationEngine.reset(initialSpeedMPS: currentSpeedMPS, initialHeading: 0.0)
+        liveSpeedMPS = initialSpeed
+        liveCourseDegrees = initialHeading
+        simulationEngine.reset(initialSpeedMPS: currentSpeedMPS, initialHeading: initialHeading)
         simulationEngine.speedVarianceRangeMPH = speedVarianceMPH
         simulationEngine.enableRandomSpeedFluctuations = speedRandomnessEnabled
         simulationEngine.enableGPSJitter = life360RealismEnabled
 
-        let totalRouteDistance = RouteBuilder.totalDistance(of: coordinates)
         activeRouteTotalDistance = totalRouteDistance
         remainingRouteDistance = totalRouteDistance
         let travelDuration = RouteBuilder.estimatedDuration(distance: totalRouteDistance, speed: currentSpeedMPS)
-        let totalStopsDuration = waypoints.reduce(0) { $0 + $1.stopDuration }
+        let totalStopsDuration = waypoints.reduce(0) { $0 + max(0.0, $1.stopDuration) }
         remainingRouteDuration = travelDuration + totalStopsDuration
 
         // Request notification permission for route completion alert if needed
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
 
-        // Precompute segment distances and cumulative suffix distances
-        var segmentDistances = [CLLocationDistance](repeating: 0, count: max(1, coordinates.count - 1))
-        for i in 0..<(coordinates.count - 1) {
-            segmentDistances[i] = RouteSimulationEngine.haversineDistance(from: coordinates[i], to: coordinates[i + 1])
-        }
-
-        var suffixDistances = [CLLocationDistance](repeating: 0, count: coordinates.count)
-        for i in (0..<(coordinates.count - 1)).reversed() {
-            suffixDistances[i] = suffixDistances[i + 1] + segmentDistances[i]
-        }
-
-        let definedStops = waypoints.filter { $0.stopDuration > 0 }
+        let definedStops = waypoints.filter { $0.stopDuration > 0 && RouteSimulationEngine.isValidCoordinate($0.coordinate) }
         let routeStartTime = Date()
+        let capturedDestination = routeDestinationName
+        let capturedSegments = plan.coordinateSegments
+        let capturedFlatCoords = plan.flattenedCoordinates
 
         if liveActivitiesEnabled {
             LiveActivityManager.shared.startActivity(
-                destinationName: routeDestinationName,
+                routeId: sessionID.uuidString,
+                destinationName: capturedDestination,
                 travelMode: travelMode,
-                speedFormatted: speedUnit.format(currentSpeedMPS),
+                speedFormatted: speedUnit.format(initialSpeed),
                 initialRemainingSeconds: remainingRouteDuration,
-                routeDistanceMeters: totalRouteDistance
+                routeDistanceMeters: totalRouteDistance,
+                isPaused: startPaused
             )
         }
 
-        routeTask = Task { [weak self] in
+        let task = Task { [weak self] in
             guard let self else { return }
-            var shouldContinue = true
-            var distanceSinceLastLight: Double = 0
-            var distanceSinceLastBusStop: Double = 0
-            var cumulativeDistanceTraveled: Double = 0
+            var completedNaturally = false
+            var playbackState = RoutePlaybackState(plan: plan)
+            var distanceSinceLastLight: Double = 0.0
+            var distanceSinceLastBusStop: Double = 0.0
+            let stepInterval: Double = 1.0
 
-            while shouldContinue && !Task.isCancelled {
+            outerLoop: while self.routeSessionController.isActive(sessionID) {
+                playbackState.resetForLoop()
                 var pendingStops = definedStops
-                var currentSegmentIndex: Int = 0
-                var distanceInCurrentSegment: CLLocationDistance = 0.0
                 var lastEpochWallTime = CACurrentMediaTime()
+                var nextTickDeadline = lastEpochWallTime + stepInterval
 
                 await MainActor.run {
-                    self.apply(coordinates[0], pairing: pairing, markRecent: true)
+                    guard self.routeSessionController.isActive(sessionID) else { return }
+                    self.apply(startCoord, pairing: pairing, markRecent: true)
                     self.stopResend()
-                    self.routeProgress = 0.0
+                    self.routeProgress = plan.isPlayable ? 0.0 : 1.0
                     self.remainingRouteDistance = totalRouteDistance
                     self.remainingRouteDuration = travelDuration + totalStopsDuration
-                    self.completedRouteCoordinates = [coordinates[0]]
-                    self.remainingRouteCoordinates = coordinates
+                    self.completedRouteSegments = [[startCoord]]
+                    self.remainingRouteSegments = capturedSegments
+                    self.completedRouteCoordinates = [startCoord]
+                    self.remainingRouteCoordinates = capturedFlatCoords
                 }
 
-                // Check starting point stop
+                if !self.routeSessionController.isActive(sessionID) { break outerLoop }
+
+                // Degenerate zero-distance route (all points identical): mark reached cleanly
+                if !plan.isPlayable {
+                    completedNaturally = true
+                    break outerLoop
+                }
+
+                // Check starting point dwell stop
                 if let stopIdx = pendingStops.firstIndex(where: {
-                    CLLocation(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude)
-                        .distance(from: CLLocation(latitude: coordinates[0].latitude, longitude: coordinates[0].longitude)) < 15
+                    RouteSimulationEngine.haversineDistance(from: $0.coordinate, to: startCoord) < 15.0
                 }) {
                     let stop = pendingStops.remove(at: stopIdx)
-                    await self.performStop(stop, pairing: pairing)
+                    await self.performStop(stop, sessionID: sessionID, pairing: pairing)
                     lastEpochWallTime = CACurrentMediaTime()
+                    nextTickDeadline = lastEpochWallTime + stepInterval
                 }
 
-                while currentSegmentIndex < (coordinates.count - 1) && !Task.isCancelled {
+                while !playbackState.isFinished && self.routeSessionController.isActive(sessionID) {
                     // Pause gate during traversal
-                    while self.isRoutePaused && !Task.isCancelled {
-                        try? await Task.sleep(nanoseconds: 200_000_000)
-                        lastEpochWallTime = CACurrentMediaTime()
+                    var wasPausedTick = false
+                    while self.isRoutePaused && self.routeSessionController.isActive(sessionID) {
+                        wasPausedTick = true
+                        try? await Task.sleep(nanoseconds: 150_000_000)
                     }
-                    if Task.isCancelled { break }
+                    guard self.routeSessionController.isActive(sessionID) else { break outerLoop }
+
+                    if wasPausedTick {
+                        lastEpochWallTime = CACurrentMediaTime()
+                        nextTickDeadline = lastEpochWallTime + stepInterval
+                    }
 
                     let epochStart = CACurrentMediaTime()
-                    let actualElapsed = max(0.2, min(2.0, epochStart - lastEpochWallTime))
+                    let rawElapsed = max(0.0, epochStart - lastEpochWallTime)
+                    // Protect against huge teleports after iOS background suspension without inflating short intervals
+                    let actualElapsed = min(4.0, rawElapsed)
                     lastEpochWallTime = epochStart
 
-                    // 1. Dynamic Speed Profiling with Acceleration & Turn Deceleration Curves & 1–5 mph Variance
-                    let p0 = coordinates[currentSegmentIndex]
-                    let p1 = coordinates[currentSegmentIndex + 1]
-                    let segmentHeading = RouteSimulationEngine.greatCircleBearing(from: p0, to: p1)
-                    var turnAngle: Double = 0.0
-                    if currentSegmentIndex < coordinates.count - 2 {
-                        let p2 = coordinates[currentSegmentIndex + 2]
-                        let nextHeading = RouteSimulationEngine.greatCircleBearing(from: p1, to: p2)
-                        turnAngle = RouteSimulationEngine.turnAngleBetween(bearing1: segmentHeading, bearing2: nextHeading)
-                    }
+                    // Read turn angle & mode speed for the CURRENT active segment BEFORE stepping
+                    let preTurnAngle = playbackState.upcomingTurnAngleDegrees
 
-                    // Speed profiling with road limit adherence & dynamic 1–5 mph variance
                     let targetBaseSpeed: Double
-                    if self.adhereToSpeedLimits, let postedLimit = RoadSpeedLimitService.shared.latestSpeedLimit?.speedLimitMPS,
-                       (self.travelMode == .drive || self.travelMode == .cycle || self.isCarModeActive) {
+                    let currentMode = await MainActor.run { self.travelMode }
+                    let currentCarActive = await MainActor.run { self.isCarModeActive }
+                    let currentAdhereLimit = await MainActor.run { self.adhereToSpeedLimits }
+                    let currentUserSpeedMPS = await MainActor.run { self.currentSpeedMPS }
+                    let currentTrafficLights = await MainActor.run { self.smartTrafficLights }
+                    let currentBusMode = await MainActor.run { self.isBusModeActive }
+                    let currentBusStops = await MainActor.run { self.busModeSmartStops }
+
+                    if currentAdhereLimit,
+                       let postedLimit = RoadSpeedLimitService.shared.latestSpeedLimit?.speedLimitMPS,
+                       (currentMode == .drive || currentMode == .cycle || currentCarActive) {
                         targetBaseSpeed = postedLimit
                     } else {
-                        targetBaseSpeed = self.currentSpeedMPS
+                        targetBaseSpeed = currentUserSpeedMPS
                     }
 
                     let liveSpeed = self.simulationEngine.computeNextSpeed(
                         baseSpeedMPS: targetBaseSpeed,
-                        travelMode: self.travelMode,
-                        turnAngleDegrees: turnAngle,
-                        elapsedSeconds: actualElapsed
+                        travelMode: currentMode,
+                        turnAngleDegrees: preTurnAngle,
+                        elapsedSeconds: max(0.05, actualElapsed)
                     )
 
-                    var stepDistRemaining = liveSpeed * actualElapsed
-                    let distanceTraveledThisStep = stepDistRemaining
-                    cumulativeDistanceTraveled += distanceTraveledThisStep
-                    distanceSinceLastLight += distanceTraveledThisStep
-                    distanceSinceLastBusStop += distanceTraveledThisStep
+                    let stepDistance = actualElapsed > 0.0 ? (liveSpeed * actualElapsed) : liveSpeed * stepInterval
+                    distanceSinceLastLight += stepDistance
+                    distanceSinceLastBusStop += stepDistance
 
-                    // 2. Advance across polyline segments according to true geodesic displacement
-                    var reachedEnd = false
-                    while stepDistRemaining > 0 {
-                        let segDist = segmentDistances[currentSegmentIndex]
-                        let remainingInSeg = max(0.0, segDist - distanceInCurrentSegment)
-                        if stepDistRemaining < remainingInSeg {
-                            distanceInCurrentSegment += stepDistRemaining
-                            stepDistRemaining = 0
-                        } else {
-                            stepDistRemaining -= remainingInSeg
-                            if currentSegmentIndex < coordinates.count - 2 {
-                                currentSegmentIndex += 1
-                                distanceInCurrentSegment = 0.0
-                            } else {
-                                currentSegmentIndex = coordinates.count - 2
-                                distanceInCurrentSegment = segDist
-                                stepDistRemaining = 0
-                                reachedEnd = true
-                                break
-                            }
-                        }
-                    }
+                    // Advance along polyline (across 0, 1, or N edges) and compute post-transition interpolation & heading!
+                    let step = playbackState.advance(byMeters: stepDistance)
 
-                    // 3. High-precision Great Circle Interpolation
-                    let curSegDist = max(0.001, segmentDistances[currentSegmentIndex])
-                    let t = min(1.0, max(0.0, distanceInCurrentSegment / curSegDist))
-                    let coord = RouteSimulationEngine.interpolateGreatCircle(from: p0, to: p1, fraction: t)
-
-                    // 4. Realistic Telemetry Payload & GPS Jitter Generation for Life360
                     let telemetry = self.simulationEngine.generateTelemetryPayload(
-                        rawCoordinate: coord,
-                        headingDegrees: segmentHeading,
+                        rawCoordinate: step.coordinate,
+                        headingDegrees: step.headingDegrees,
                         speedMPS: liveSpeed,
-                        travelMode: self.travelMode
+                        travelMode: currentMode
                     )
                     let finalCoord = telemetry.coordinate
 
-                    let remainingInCurSeg = max(0.0, segmentDistances[currentSegmentIndex] - distanceInCurrentSegment)
-                    let nextSuffixIdx = currentSegmentIndex + 1
-                    let nextSuffixDist = (nextSuffixIdx < suffixDistances.count) ? suffixDistances[nextSuffixIdx] : 0.0
-                    let remainingDistance = remainingInCurSeg + nextSuffixDist
-                    let remainingTravel = RouteBuilder.estimatedDuration(distance: remainingDistance, speed: targetBaseSpeed)
-                    let remainingStops = pendingStops.reduce(0) { $0 + $1.stopDuration }
-
-                    // Safe slices for animated polyline progress (prevents out-of-bounds crash at route end)
-                    let completedSlice: [CLLocationCoordinate2D]
-                    if currentSegmentIndex < coordinates.count {
-                        completedSlice = Array(coordinates[0...currentSegmentIndex]) + [coord]
-                    } else {
-                        completedSlice = coordinates + [coord]
-                    }
-
-                    let remainingSlice: [CLLocationCoordinate2D]
-                    if currentSegmentIndex + 1 < coordinates.count {
-                        remainingSlice = [coord] + Array(coordinates[(currentSegmentIndex + 1)...])
-                    } else {
-                        remainingSlice = [coord]
-                    }
+                    let remainingTravel = RouteBuilder.estimatedDuration(distance: step.remainingDistanceMeters, speed: targetBaseSpeed)
+                    let remainingStops = pendingStops.reduce(0.0) { $0 + max(0.0, $1.stopDuration) }
 
                     // Periodically fetch road speed limits for HUD & vehicle mode
-                    if (self.travelMode == .drive || self.travelMode == .cycle || self.isCarModeActive) {
+                    if currentMode == .drive || currentMode == .cycle || currentCarActive {
                         RoadSpeedLimitService.shared.fetchSpeedLimit(at: finalCoord)
                     }
+
+                    guard self.routeSessionController.isActive(sessionID) else { break outerLoop }
 
                     // Continuous heartbeat checkpoint for crash recovery
                     CrashRecoveryManager.shared.updateHeartbeat(
                         snapshot: SpoofSessionSnapshot(
                             sessionType: .route,
                             coordinate: finalCoord,
-                            locationName: self.routeDestinationName,
-                            travelMode: self.travelMode,
+                            locationName: capturedDestination,
+                            travelMode: currentMode,
                             currentSpeedMPS: liveSpeed,
-                            routeName: self.routeDestinationName,
-                            routeCoordinates: coordinates,
+                            routeName: capturedDestination,
+                            routeCoordinates: capturedFlatCoords,
+                            routeCoordinateSegments: capturedSegments,
                             routeWaypoints: waypoints,
-                            currentSegmentIndex: currentSegmentIndex,
-                            routeProgress: min(1.0, max(0.0, 1.0 - (remainingDistance / max(1.0, totalRouteDistance)))),
+                            currentSegmentIndex: step.activeEdgeIndex,
+                            routeProgress: step.progress,
                             isLoop: loop,
-                            remainingDistanceMeters: remainingDistance
+                            remainingDistanceMeters: step.remainingDistanceMeters
                         )
                     )
 
-                    // Physical injection directly on background simulation thread for sub-millisecond precision
+                    // Final guard right before hardware location injection so superseded tasks never leak stale GPS
+                    guard self.routeSessionController.isActive(sessionID) else { break outerLoop }
                     _ = LocationEngine.set(
                         latitude: finalCoord.latitude,
                         longitude: finalCoord.longitude,
@@ -948,21 +1036,27 @@ final class SpoofSession: ObservableObject {
                         deviceIP: TunnelConfig.targetIP
                     )
 
+                    let completedFlat = step.completedCoordinates
+                    let remainingFlat = step.remainingCoordinates
+
                     await MainActor.run {
+                        guard self.routeSessionController.isActive(sessionID) else { return }
                         self.simulated = finalCoord
                         self.pin = finalCoord
                         self.liveSpeedMPS = telemetry.speedMPS
                         self.liveCourseDegrees = telemetry.courseDegrees
                         self.currentSpeedLimitInfo = RoadSpeedLimitService.shared.currentRoadSpeed
-                        self.routeProgress = min(1.0, max(0.0, 1.0 - (remainingDistance / max(1.0, totalRouteDistance))))
-                        self.remainingRouteDistance = remainingDistance
+                        self.routeProgress = step.progress
+                        self.remainingRouteDistance = step.remainingDistanceMeters
                         self.remainingRouteDuration = remainingTravel + remainingStops
-                        self.completedRouteCoordinates = completedSlice
-                        self.remainingRouteCoordinates = remainingSlice
+                        self.completedRouteSegments = step.completedSegments
+                        self.remainingRouteSegments = step.remainingSegments
+                        self.completedRouteCoordinates = completedFlat
+                        self.remainingRouteCoordinates = remainingFlat
                         if self.liveActivitiesEnabled {
                             LiveActivityManager.shared.updateActivity(
-                                progress: self.routeProgress,
-                                remainingDistanceMeters: remainingDistance,
+                                progress: step.progress,
+                                remainingDistanceMeters: step.remainingDistanceMeters,
                                 remainingDurationSeconds: self.remainingRouteDuration,
                                 destinationName: self.routeDestinationName,
                                 travelMode: self.travelMode,
@@ -973,270 +1067,329 @@ final class SpoofSession: ObservableObject {
                         }
                     }
 
-                    // Check if coordinate matches a pending stop: snap and perform dwell stop
+                    guard self.routeSessionController.isActive(sessionID) else { break outerLoop }
+
+                    // Check if coordinate matches a pending dwell stop
                     if let stopIdx = pendingStops.firstIndex(where: {
-                        CLLocation(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude)
-                            .distance(from: CLLocation(latitude: coord.latitude, longitude: coord.longitude)) < 15
+                        RouteSimulationEngine.haversineDistance(from: $0.coordinate, to: step.coordinate) < 15.0
                     }) {
                         let stop = pendingStops.remove(at: stopIdx)
                         await MainActor.run {
+                            guard self.routeSessionController.isActive(sessionID) else { return }
                             self.applySimulatedMovement(stop.coordinate, pairing: pairing)
                         }
-                        await self.performStop(stop, pairing: pairing)
+                        await self.performStop(stop, sessionID: sessionID, pairing: pairing)
+                        guard self.routeSessionController.isActive(sessionID) else { break outerLoop }
                         lastEpochWallTime = CACurrentMediaTime()
+                        nextTickDeadline = lastEpochWallTime + stepInterval
                     }
 
-                    // Smart Traffic Lights: ONLY stop if enabled by user
-                    if (self.travelMode == .drive || self.isCarModeActive) && self.smartTrafficLights && distanceSinceLastLight > 500 {
-                        if currentSegmentIndex > 0 && currentSegmentIndex < coordinates.count - 1 &&
-                           Self.isIntersection(before: coordinates[currentSegmentIndex - 1], at: coordinates[currentSegmentIndex], after: coordinates[currentSegmentIndex + 1]) {
-                            distanceSinceLastLight = 0
+                    // Smart Traffic Lights: ONLY stop if enabled by user and at a real corner (not GPX segment break)
+                    if (currentMode == .drive || currentCarActive) && currentTrafficLights && distanceSinceLastLight > 500.0 {
+                        if step.upcomingTurnAngleDegrees > 28.0 {
+                            distanceSinceLastLight = 0.0
                             if Double.random(in: 0...1) < 0.30 {
-                                await self.performTrafficLightStop(pairing: pairing)
+                                await self.performTrafficLightStop(sessionID: sessionID, pairing: pairing)
+                                guard self.routeSessionController.isActive(sessionID) else { break outerLoop }
                                 lastEpochWallTime = CACurrentMediaTime()
+                                nextTickDeadline = lastEpochWallTime + stepInterval
                             }
                         }
                     }
 
                     // Smart Bus Stops: ONLY stop if enabled by user
-                    if (self.travelMode == .bus || self.isBusModeActive) && self.busModeSmartStops && distanceSinceLastBusStop > 450 {
-                        if currentSegmentIndex > 0 && currentSegmentIndex < coordinates.count - 1 &&
-                           Self.isIntersection(before: coordinates[currentSegmentIndex - 1], at: coordinates[currentSegmentIndex], after: coordinates[currentSegmentIndex + 1]) {
-                            distanceSinceLastBusStop = 0
+                    if (currentMode == .bus || currentBusMode) && currentBusStops && distanceSinceLastBusStop > 450.0 {
+                        if step.upcomingTurnAngleDegrees > 28.0 {
+                            distanceSinceLastBusStop = 0.0
                             if Double.random(in: 0...1) < 0.35 {
-                                await self.performBusStop(pairing: pairing)
+                                await self.performBusStop(sessionID: sessionID, pairing: pairing)
+                                guard self.routeSessionController.isActive(sessionID) else { break outerLoop }
                                 lastEpochWallTime = CACurrentMediaTime()
+                                nextTickDeadline = lastEpochWallTime + stepInterval
                             }
                         }
                     }
 
-                    if reachedEnd {
+                    if step.reachedEnd {
                         break
                     }
 
-                    // Standard 1.0s GPS epoch cadence matching Apple locationd
-                    let elapsedSoFar = CACurrentMediaTime() - epochStart
-                    let targetSleep = max(0.05, 1.0 - elapsedSoFar)
-                    try? await Task.sleep(nanoseconds: UInt64(targetSleep * 1_000_000_000))
+                    // Monotonic deadline sleep prevents accumulated timing drift across ticks
+                    nextTickDeadline += stepInterval
+                    let now = CACurrentMediaTime()
+                    if nextTickDeadline < now - 2.0 {
+                        nextTickDeadline = now + stepInterval
+                    }
+                    let sleepDuration = nextTickDeadline - now
+                    if sleepDuration > 0.005 {
+                        try? await Task.sleep(nanoseconds: UInt64(sleepDuration * 1_000_000_000))
+                    } else {
+                        await Task.yield()
+                    }
                 }
 
-                if !loop || Task.isCancelled {
-                    shouldContinue = false
+                if !self.routeSessionController.isActive(sessionID) {
+                    break outerLoop
+                }
+                if !loop {
+                    completedNaturally = true
+                    break outerLoop
                 }
             }
 
-            await MainActor.run {
-                CrashRecoveryManager.shared.clearSession()
-                self.isFollowingRoute = false
-                self.isRoutePaused = false
-                self.liveSpeedMPS = 0.0
-                self.routeProgress = 1.0
-                self.remainingRouteDistance = 0.0
-                self.remainingRouteDuration = 0.0
-                self.activeStopName = nil
-                self.activeStopRemainingSeconds = nil
-                self.isTrafficLightStopActive = false
-                self.isBusStopActive = false
-                self.startResend(pairing: pairing)
-
-                let totalDuration = Date().timeIntervalSince(routeStartTime)
-                if self.liveActivitiesEnabled {
-                    LiveActivityManager.shared.endActivity(destinationName: self.routeDestinationName)
-                    if let endCoord = coordinates.last {
-                        LiveActivityManager.shared.startSpoofActivity(
-                            locationName: self.routeDestinationName.isEmpty ? Self.coordinateLabel(endCoord) : self.routeDestinationName,
-                            coordinate: endCoord,
-                            speedFormatted: "Stationary",
-                            isJoystick: false
-                        )
+            if completedNaturally && self.routeSessionController.claimCompletion(for: sessionID) {
+                await MainActor.run {
+                    self.completeRouteNaturally(
+                        plan: plan,
+                        destinationName: capturedDestination,
+                        routeStartTime: routeStartTime,
+                        stopsVisited: definedStops.count,
+                        pairing: pairing
+                    )
+                }
+            } else if self.routeSessionController.claimCleanup(for: sessionID) {
+                await MainActor.run {
+                    CrashRecoveryManager.shared.clearSession()
+                    self.cleanupRouteUIState()
+                    if self.liveActivitiesEnabled {
+                        LiveActivityManager.shared.endActivity(destinationName: capturedDestination)
                     }
                 }
+            }
+        }
+        routeTask = task
+        sessionResources.setRouteTask(task)
+    }
 
-                self.routeCompletionSummary = RouteCompletionStats(
-                    destinationName: self.routeDestinationName.isEmpty ? "Destination" : self.routeDestinationName,
-                    totalDistanceMeters: totalRouteDistance,
-                    durationSeconds: max(1, totalDuration),
-                    stopsVisited: definedStops.count
+    private func completeRouteNaturally(
+        plan: RoutePlaybackPlan,
+        destinationName: String,
+        routeStartTime: Date,
+        stopsVisited: Int,
+        pairing: PairingStore
+    ) {
+        CrashRecoveryManager.shared.clearSession()
+        cleanupRouteUIState()
+        routeProgress = 1.0
+        completedRouteSegments = plan.coordinateSegments
+        completedRouteCoordinates = plan.flattenedCoordinates
+        remainingRouteSegments = []
+        remainingRouteCoordinates = []
+        startResend(pairing: pairing)
+
+        let totalDuration = Date().timeIntervalSince(routeStartTime)
+        if liveActivitiesEnabled {
+            LiveActivityManager.shared.endActivity(destinationName: destinationName)
+            if let endCoord = plan.endCoordinate {
+                LiveActivityManager.shared.startSpoofActivity(
+                    locationName: destinationName.isEmpty ? Self.coordinateLabel(endCoord) : destinationName,
+                    coordinate: endCoord,
+                    speedFormatted: "Stationary",
+                    isJoystick: false
                 )
+            }
+        }
 
-                // Completion triggers: rumble haptics, notification, sound, and screen flash!
-                self.triggerCompletionRumble()
-                self.notifyRouteFinished(
-                    destination: self.routeDestinationName,
-                    distanceMeters: totalRouteDistance,
-                    durationSeconds: max(1, totalDuration)
-                )
-                withAnimation(.easeIn(duration: 0.15)) {
-                    self.routeFinishedFlash = true
-                }
-                SoundManager.play(.success)
+        routeCompletionSummary = RouteCompletionStats(
+            destinationName: destinationName.isEmpty ? "Destination" : destinationName,
+            totalDistanceMeters: plan.totalDistance,
+            durationSeconds: max(1, totalDuration),
+            stopsVisited: stopsVisited
+        )
 
-                // Auto-fade flash after 1.2 seconds so screen NEVER stays green!
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                    withAnimation(.easeOut(duration: 0.45)) {
-                        self?.routeFinishedFlash = false
-                    }
-                }
+        triggerCompletionRumble()
+        notifyRouteFinished(
+            destination: destinationName,
+            distanceMeters: plan.totalDistance,
+            durationSeconds: max(1, totalDuration)
+        )
+        withAnimation(.easeIn(duration: 0.15)) {
+            routeFinishedFlash = true
+        }
+        SoundManager.play(.success)
+
+        // Auto-fade flash after 1.2 seconds so screen NEVER stays green!
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            withAnimation(.easeOut(duration: 0.45)) {
+                self?.routeFinishedFlash = false
             }
         }
     }
 
     /// Calculates initial bearing in degrees from p1 to p2
     static func bearing(from p1: CLLocationCoordinate2D, to p2: CLLocationCoordinate2D) -> Double {
-        let lat1 = p1.latitude * .pi / 180
-        let lon1 = p1.longitude * .pi / 180
-        let lat2 = p2.latitude * .pi / 180
-        let lon2 = p2.longitude * .pi / 180
-        let dLon = lon2 - lon1
-        let y = sin(dLon) * cos(lat2)
-        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
-        let rad = atan2(y, x)
-        return (rad * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
+        RouteSimulationEngine.greatCircleBearing(from: p1, to: p2)
     }
 
     /// Checks if a waypoint junction forms a street turn/intersection (heading change > 28°)
     static func isIntersection(before: CLLocationCoordinate2D, at: CLLocationCoordinate2D, after: CLLocationCoordinate2D) -> Bool {
-        let b1 = bearing(from: before, to: at)
-        let b2 = bearing(from: at, to: after)
-        var diff = abs(b1 - b2)
-        if diff > 180 { diff = 360 - diff }
-        return diff > 28.0
+        let b1 = RouteSimulationEngine.greatCircleBearing(from: before, to: at)
+        let b2 = RouteSimulationEngine.greatCircleBearing(from: at, to: after)
+        return RouteSimulationEngine.turnAngleBetween(bearing1: b1, bearing2: b2) > 28.0
     }
 
     /// Dynamically updates the active route when waypoints or path is modified during execution or pause
     func updateActiveRoute(
         newCoordinates: [CLLocationCoordinate2D],
         newWaypoints: [RouteWaypoint] = [],
+        coordinateSegments: [[CLLocationCoordinate2D]]? = nil,
         pairing: PairingStore,
         loop: Bool = false
     ) {
-        guard isFollowingRoute, let currentPos = simulated ?? newCoordinates.first else { return }
+        guard isFollowingRoute else { return }
+        let wasPaused = isRoutePaused
+
+        if let segs = coordinateSegments, !segs.isEmpty {
+            let validSegs = segs.map { $0.filter { RouteSimulationEngine.isValidCoordinate($0) } }.filter { !$0.isEmpty }
+            guard !validSegs.isEmpty else { return }
+            followRoute(
+                segments: validSegs,
+                waypoints: newWaypoints,
+                destinationName: routeDestinationName,
+                pairing: pairing,
+                loop: loop,
+                startPaused: wasPaused
+            )
+            return
+        }
+
+        let validNew = newCoordinates.filter { RouteSimulationEngine.isValidCoordinate($0) }
+        guard let currentPos = simulated ?? validNew.first, RouteSimulationEngine.isValidCoordinate(currentPos) else { return }
         var spliced: [CLLocationCoordinate2D] = [currentPos]
-        if let first = newCoordinates.first,
-           CLLocation(latitude: currentPos.latitude, longitude: currentPos.longitude)
-            .distance(from: CLLocation(latitude: first.latitude, longitude: first.longitude)) > 4 {
-            spliced.append(contentsOf: newCoordinates)
+        if let first = validNew.first,
+           RouteSimulationEngine.haversineDistance(from: currentPos, to: first) > 4.0 {
+            spliced.append(contentsOf: validNew)
         } else {
-            spliced.append(contentsOf: newCoordinates.dropFirst())
+            spliced.append(contentsOf: validNew.dropFirst())
         }
         guard spliced.count >= 2 else { return }
-        let wasPaused = isRoutePaused
         followRoute(
             spliced,
             waypoints: newWaypoints,
             destinationName: routeDestinationName,
             pairing: pairing,
-            loop: loop
+            loop: loop,
+            startPaused: wasPaused
         )
-        if wasPaused {
-            isRoutePaused = true
-        }
     }
 
-    private func performStop(_ stop: RouteWaypoint, pairing: PairingStore) async {
-        guard stop.stopDuration > 0 else { return }
+    private func performStop(_ stop: RouteWaypoint, sessionID: UUID, pairing: PairingStore) async {
+        guard stop.stopDuration > 0, routeSessionController.isActive(sessionID) else { return }
         let stopName = stop.name.isEmpty ? "Scheduled Stop" : stop.name
         let duration = stop.stopDuration
         await MainActor.run {
+            guard self.routeSessionController.isActive(sessionID) else { return }
+            self.skipCurrentStopRequested = false
             self.activeStopName = stopName
             self.activeStopRemainingSeconds = duration
             self.applySimulatedMovement(stop.coordinate, pairing: pairing)
             SoundManager.play(.dwell)
         }
 
-        var elapsed: Double = 0
-        while elapsed < duration && !Task.isCancelled {
-            while self.isRoutePaused && !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-            if self.skipCurrentStopRequested {
-                self.skipCurrentStopRequested = false
-                break
-            }
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            elapsed += 1.0
-            let remaining = max(0, duration - elapsed)
-            await MainActor.run {
-                self.activeStopRemainingSeconds = remaining
-                self.applySimulatedMovement(stop.coordinate, pairing: pairing)
-            }
+        await runDwellLoop(duration: duration, sessionID: sessionID) { [weak self] in
+            guard let self, self.routeSessionController.isActive(sessionID) else { return }
+            self.applySimulatedMovement(stop.coordinate, pairing: pairing)
         }
 
         await MainActor.run {
+            guard self.routeSessionController.isActive(sessionID) else { return }
             self.activeStopName = nil
             self.activeStopRemainingSeconds = nil
+            self.skipCurrentStopRequested = false
         }
     }
 
-    private func performTrafficLightStop(pairing: PairingStore) async {
+    private func performTrafficLightStop(sessionID: UUID, pairing: PairingStore) async {
+        guard routeSessionController.isActive(sessionID) else { return }
         let duration: Double = Double.random(in: 12...20)
         await MainActor.run {
+            guard self.routeSessionController.isActive(sessionID) else { return }
+            self.skipCurrentStopRequested = false
             self.isTrafficLightStopActive = true
             self.activeStopName = "Traffic Light"
             self.activeStopRemainingSeconds = duration
             SoundManager.play(.dwell)
         }
 
-        var elapsed: Double = 0
-        while elapsed < duration && !Task.isCancelled {
-            while self.isRoutePaused && !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-            if self.skipCurrentStopRequested {
-                self.skipCurrentStopRequested = false
-                break
-            }
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            elapsed += 1.0
-            let remaining = max(0, duration - elapsed)
-            await MainActor.run {
-                self.activeStopRemainingSeconds = remaining
-                if let sim = self.simulated {
-                    self.applySimulatedMovement(sim, pairing: pairing)
-                }
-            }
+        await runDwellLoop(duration: duration, sessionID: sessionID) { [weak self] in
+            guard let self, self.routeSessionController.isActive(sessionID), let sim = self.simulated else { return }
+            self.applySimulatedMovement(sim, pairing: pairing)
         }
 
         await MainActor.run {
+            guard self.routeSessionController.isActive(sessionID) else { return }
             self.isTrafficLightStopActive = false
             self.activeStopName = nil
             self.activeStopRemainingSeconds = nil
+            self.skipCurrentStopRequested = false
         }
     }
 
-    private func performBusStop(pairing: PairingStore) async {
+    private func performBusStop(sessionID: UUID, pairing: PairingStore) async {
+        guard routeSessionController.isActive(sessionID) else { return }
         let duration: Double = Double.random(in: 10...16)
         await MainActor.run {
+            guard self.routeSessionController.isActive(sessionID) else { return }
+            self.skipCurrentStopRequested = false
             self.isBusStopActive = true
             self.activeStopName = "Bus Passenger Stop"
             self.activeStopRemainingSeconds = duration
             SoundManager.play(.dwell)
         }
 
-        var elapsed: Double = 0
-        while elapsed < duration && !Task.isCancelled {
-            while self.isRoutePaused && !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-            if self.skipCurrentStopRequested {
-                self.skipCurrentStopRequested = false
-                break
-            }
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            elapsed += 1.0
-            let remaining = max(0, duration - elapsed)
-            await MainActor.run {
-                self.activeStopRemainingSeconds = remaining
-                if let sim = self.simulated {
-                    self.applySimulatedMovement(sim, pairing: pairing)
-                }
-            }
+        await runDwellLoop(duration: duration, sessionID: sessionID) { [weak self] in
+            guard let self, self.routeSessionController.isActive(sessionID), let sim = self.simulated else { return }
+            self.applySimulatedMovement(sim, pairing: pairing)
         }
 
         await MainActor.run {
+            guard self.routeSessionController.isActive(sessionID) else { return }
             self.isBusStopActive = false
             self.activeStopName = nil
             self.activeStopRemainingSeconds = nil
+            self.skipCurrentStopRequested = false
+        }
+    }
+
+    private func runDwellLoop(
+        duration: TimeInterval,
+        sessionID: UUID,
+        onHeartbeatMainActor: @escaping @MainActor () -> Void
+    ) async {
+        var elapsed: Double = 0.0
+        var lastWallTime = CACurrentMediaTime()
+
+        while elapsed < duration && routeSessionController.isActive(sessionID) {
+            var paused = false
+            while isRoutePaused && routeSessionController.isActive(sessionID) {
+                paused = true
+                try? await Task.sleep(nanoseconds: 150_000_000)
+            }
+            guard routeSessionController.isActive(sessionID) else { break }
+
+            if paused {
+                lastWallTime = CACurrentMediaTime()
+            }
+            if skipCurrentStopRequested {
+                skipCurrentStopRequested = false
+                break
+            }
+
+            let sleepTime = min(1.0, max(0.05, duration - elapsed))
+            try? await Task.sleep(nanoseconds: UInt64(sleepTime * 1_000_000_000))
+            guard routeSessionController.isActive(sessionID) else { break }
+
+            let now = CACurrentMediaTime()
+            let delta = min(5.0, max(0.0, now - lastWallTime))
+            lastWallTime = now
+            elapsed += delta
+
+            let remaining = max(0.0, duration - elapsed)
+            await MainActor.run {
+                guard self.routeSessionController.isActive(sessionID) else { return }
+                self.activeStopRemainingSeconds = remaining
+                onHeartbeatMainActor()
+            }
         }
     }
 
@@ -1252,12 +1405,14 @@ final class SpoofSession: ObservableObject {
 
     func notifyRouteFinished(destination: String, distanceMeters: Double = 0, durationSeconds: TimeInterval = 0) {
         guard routeNotificationsEnabled else { return }
+        let trimmedName = travelerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modeTitle = travelMode.title
+
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             guard granted else { return }
             let content = UNMutableNotificationContent()
             let cleanDest = destination.trimmingCharacters(in: .whitespacesAndNewlines)
             let finalDest = cleanDest.isEmpty ? "Destination" : cleanDest
-            let trimmedName = self.travelerName.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if !trimmedName.isEmpty {
                 content.title = "📍 \(trimmedName) arrived at \(finalDest)!"
@@ -1273,7 +1428,7 @@ final class SpoofSession: ObservableObject {
                 let mins = Int(ceil(durationSeconds / 60.0))
                 parts.append("\(mins) min")
             }
-            parts.append(self.travelMode.title)
+            parts.append(modeTitle)
             content.subtitle = parts.joined(separator: " • ")
 
             if !trimmedName.isEmpty {
@@ -1431,6 +1586,7 @@ final class SpoofSession: ObservableObject {
     }
 
     func applySimulatedMovement(_ coordinate: CLLocationCoordinate2D, pairing: PairingStore) {
+        guard RouteSimulationEngine.isValidCoordinate(coordinate) else { return }
         let result = LocationEngine.set(
             latitude: coordinate.latitude,
             longitude: coordinate.longitude,
@@ -1457,6 +1613,10 @@ final class SpoofSession: ObservableObject {
     }
 
     private func apply(_ coordinate: CLLocationCoordinate2D, pairing: PairingStore, markRecent: Bool) {
+        guard RouteSimulationEngine.isValidCoordinate(coordinate) else {
+            lastError = "Invalid coordinate."
+            return
+        }
         if status == .idle || status.isDropped {
             status = .connecting
         }
@@ -1521,7 +1681,7 @@ final class SpoofSession: ObservableObject {
         let ny = -joystickVector.dy / magnitude
 
         let now = CACurrentMediaTime()
-        let dt = lastJoystickWallTime > 0 ? max(0.2, min(2.5, now - lastJoystickWallTime)) : 1.0
+        let dt = lastJoystickWallTime > 0 ? max(0.05, min(2.5, now - lastJoystickWallTime)) : 1.0
         lastJoystickWallTime = now
 
         // Kinematic joystick velocity with speed variance range (1–5 mph)
@@ -1541,7 +1701,7 @@ final class SpoofSession: ObservableObject {
         liveSpeedMPS = liveSpeed
         let meters = liveSpeed * dt
 
-        let headingDeg = (atan2(nx, ny) * 180.0 / .pi + 360.0).truncatingRemainder(dividingBy: 360.0)
+        let headingDeg = RouteSimulationEngine.normalizeBearing(atan2(nx, ny) * 180.0 / .pi)
         let nextRaw = offset(coordinate: current, eastMeters: nx * meters, northMeters: ny * meters)
         let nextNoisy = life360RealismEnabled
             ? applyGPSNoise(to: nextRaw, headingDegrees: headingDeg, speedMPS: liveSpeed)
@@ -1585,16 +1745,18 @@ final class SpoofSession: ObservableObject {
         }
         RunLoop.main.add(timer, forMode: .common)
         resendTimer = timer
+        sessionResources.setResendTimer(timer)
     }
 
     private func stopResend() {
         resendTimer?.invalidate()
         resendTimer = nil
+        sessionResources.setResendTimer(nil)
     }
 
     private func startHealth(pairing: PairingStore) {
         healthTimer?.invalidate()
-        healthTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let sim = self.simulated else { return }
                 if case .dropped = self.status {
@@ -1606,11 +1768,14 @@ final class SpoofSession: ObservableObject {
                 }
             }
         }
+        healthTimer = timer
+        sessionResources.setHealthTimer(timer)
     }
 
     private func stopHealth() {
         healthTimer?.invalidate()
         healthTimer = nil
+        sessionResources.setHealthTimer(nil)
     }
 
     private func pushRecent(_ coordinate: CLLocationCoordinate2D) {
@@ -1638,7 +1803,9 @@ final class SpoofSession: ObservableObject {
     private func beginBackground() {
         guard backgroundTask == .invalid else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
-            self?.endBackground()
+            Task { @MainActor [weak self] in
+                self?.endBackground()
+            }
         }
     }
 
@@ -1659,9 +1826,61 @@ final class SpoofSession: ObservableObject {
     }
 
     private func offset(coordinate: CLLocationCoordinate2D, eastMeters: Double, northMeters: Double) -> CLLocationCoordinate2D {
-        let earth = 6378137.0
-        let dLat = northMeters / earth * (180 / .pi)
-        let dLon = eastMeters / (earth * cos(coordinate.latitude * .pi / 180)) * (180 / .pi)
-        return CLLocationCoordinate2D(latitude: coordinate.latitude + dLat, longitude: coordinate.longitude + dLon)
+        RouteSimulationEngine.offsetCoordinate(coordinate, eastMeters: eastMeters, northMeters: northMeters)
+    }
+}
+
+/// Thread-safe handle bag so `SpoofSession.deinit` can invalidate timers and cancel active tasks
+/// without triggering Swift 5/6 `@MainActor` isolation warnings.
+private final class NonisolatedSessionResources: @unchecked Sendable {
+    private let lock = NSLock()
+    private var routeTask: Task<Void, Never>?
+    private var resendTimer: Timer?
+    private var healthTimer: Timer?
+    private var joystickTimer: Timer?
+
+    func setRouteTask(_ task: Task<Void, Never>?) {
+        lock.lock()
+        routeTask = task
+        lock.unlock()
+    }
+
+    func setResendTimer(_ timer: Timer?) {
+        lock.lock()
+        resendTimer = timer
+        lock.unlock()
+    }
+
+    func setHealthTimer(_ timer: Timer?) {
+        lock.lock()
+        healthTimer = timer
+        lock.unlock()
+    }
+
+    func setJoystickTimer(_ timer: Timer?) {
+        lock.lock()
+        joystickTimer = timer
+        lock.unlock()
+    }
+
+    deinit {
+        lock.lock()
+        let task = routeTask
+        let resend = resendTimer
+        let health = healthTimer
+        let joy = joystickTimer
+        routeTask = nil
+        resendTimer = nil
+        healthTimer = nil
+        joystickTimer = nil
+        lock.unlock()
+
+        task?.cancel()
+        let timers = [resend, health, joy].compactMap { $0 }
+        if !timers.isEmpty {
+            DispatchQueue.main.async {
+                timers.forEach { $0.invalidate() }
+            }
+        }
     }
 }

@@ -303,4 +303,96 @@ final class GPXCodecTests: XCTestCase {
         XCTAssertEqual(coords.count, 1)
         XCTAssertEqual(coords[0].latitude, 3.0, accuracy: 1e-9)
     }
+
+    func testMultiSegmentRoundTripPreservesSegmentsAndName() throws {
+        let seg1 = [
+            CLLocationCoordinate2D(latitude: 37.100, longitude: -122.100),
+            CLLocationCoordinate2D(latitude: 37.101, longitude: -122.100)
+        ]
+        let seg2 = [
+            CLLocationCoordinate2D(latitude: 37.500, longitude: -122.500),
+            CLLocationCoordinate2D(latitude: 37.502, longitude: -122.500)
+        ]
+        let xml = GPXCodec.export(coordinateSegments: [seg1, seg2], name: "MultiLeg")
+        let reparsed = try GPXCodec.parseTrack(data: Data(xml.utf8))
+
+        XCTAssertEqual(reparsed.name, "MultiLeg")
+        XCTAssertEqual(reparsed.segments.count, 2)
+        XCTAssertEqual(reparsed.segments[0].count, 2)
+        XCTAssertEqual(reparsed.segments[1].count, 2)
+        XCTAssertEqual(reparsed.segments[1][0].coordinate.latitude, 37.500, accuracy: 1e-6)
+    }
+
+    func testMissingOrMalformedOptionalFieldsDoNotDropValidPoints() throws {
+        let gpx = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+          <trk>
+            <trkseg></trkseg>
+            <trkseg>
+              <trkpt lat=" 12.345 " lon=" -45.678 "><ele>not_a_number</ele><time>bad_date</time></trkpt>
+              <trkpt lat="12.346" lon="-45.679"><time>2025-01-01T12:00:00.123Z</time></trkpt>
+            </trkseg>
+          </trk>
+          <trk>
+            <trkseg>
+              <trkpt lat="20.0" lon="30.0"/>
+            </trkseg>
+          </trk>
+        </gpx>
+        """
+        let track = try GPXCodec.parseTrack(data: Data(gpx.utf8))
+        // Empty <trkseg> dropped, second <trk> becomes separate segment
+        XCTAssertEqual(track.segments.count, 2)
+        XCTAssertEqual(track.segments[0].count, 2)
+        XCTAssertNil(track.segments[0][0].elevation)
+        XCTAssertNil(track.segments[0][0].time)
+        XCTAssertNotNil(track.segments[0][1].time)
+        XCTAssertEqual(track.segments[1].count, 1)
+    }
+
+    func testMissingCoordinateAttributeThrowsInvalidCoordinate() {
+        let gpx = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+          <trk><trkseg><trkpt lat="10.0"></trkpt></trkseg></trk>
+        </gpx>
+        """
+        XCTAssertThrowsError(try GPXCodec.parseTrack(data: Data(gpx.utf8))) { error in
+            guard case GPXError.invalidCoordinate = error else {
+                return XCTFail("expected .invalidCoordinate, got \(error)")
+            }
+        }
+    }
+
+    func testConcurrentParsingThreadSafety() {
+        let gpx = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+          <trk><name>Concurrent</name><trkseg>
+            <trkpt lat="10.0" lon="20.0"><time>2024-03-05T08:15:30Z</time></trkpt>
+            <trkpt lat="10.1" lon="20.1"><time>2024-03-05T08:15:40.250Z</time></trkpt>
+          </trkseg></trk>
+        </gpx>
+        """
+        let data = Data(gpx.utf8)
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "gpx.concurrent.test", attributes: .concurrent)
+
+        for _ in 0..<24 {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                do {
+                    let parsed = try GPXCodec.parseTrack(data: data)
+                    XCTAssertEqual(parsed.coordinates.count, 2)
+                    XCTAssertNotNil(parsed.allPoints[0].time)
+                    XCTAssertNotNil(parsed.allPoints[1].time)
+                } catch {
+                    XCTFail("Concurrent parse failed: \(error)")
+                }
+            }
+        }
+        XCTAssertEqual(group.wait(timeout: .now() + 5), .success)
+    }
 }

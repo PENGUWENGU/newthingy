@@ -180,32 +180,45 @@ enum RouteBuilder {
         return sampled
     }
 
-    /// Offsets path ~3.2m perpendicular to travel direction so the route follows pedestrian sidewalks rather than street centerlines
+    /// Offsets path perpendicular to geodesic travel direction so routes follow sidewalks cleanly across all latitudes.
     static func applySidewalkOffset(coordinates: [CLLocationCoordinate2D], offsetMeters: Double = 3.2) -> [CLLocationCoordinate2D] {
-        guard coordinates.count >= 2 else { return coordinates }
-        var result: [CLLocationCoordinate2D] = []
-        let earthRadius = 6378137.0 // meters
+        let valid = coordinates.filter { RouteSimulationEngine.isValidCoordinate($0) }
+        guard valid.count >= 2, offsetMeters.isFinite, abs(offsetMeters) > 1e-4 else { return valid }
 
-        for i in 0..<coordinates.count {
-            let p = coordinates[i]
-            let heading: Double
-            if i < coordinates.count - 1 {
-                let next = coordinates[i + 1]
-                heading = atan2(next.longitude - p.longitude, next.latitude - p.latitude)
-            } else {
-                let prev = coordinates[i - 1]
-                heading = atan2(p.longitude - prev.longitude, p.latitude - prev.latitude)
+        var result: [CLLocationCoordinate2D] = []
+        result.reserveCapacity(valid.count)
+        var lastValidHeading: Double? = nil
+
+        for i in 0..<valid.count {
+            let p = valid[i]
+            var heading: Double? = nil
+
+            // Look ahead to the next distinct coordinate so duplicate vertices do not corrupt heading
+            if i < valid.count - 1 {
+                for j in (i + 1)..<valid.count {
+                    if RouteSimulationEngine.haversineDistance(from: p, to: valid[j]) >= 0.05 {
+                        heading = RouteSimulationEngine.greatCircleBearing(from: p, to: valid[j])
+                        break
+                    }
+                }
+            }
+            if heading == nil, i > 0 {
+                for j in stride(from: i - 1, through: 0, by: -1) {
+                    if RouteSimulationEngine.haversineDistance(from: valid[j], to: p) >= 0.05 {
+                        heading = RouteSimulationEngine.greatCircleBearing(from: valid[j], to: p)
+                        break
+                    }
+                }
             }
 
-            // Normal angle 90 degrees to the right for standard sidewalk
-            let perpAngle = heading + (.pi / 2.0)
-            let latOffset = (offsetMeters * cos(perpAngle)) / earthRadius * (180.0 / .pi)
-            let lonOffset = (offsetMeters * sin(perpAngle)) / (earthRadius * cos(p.latitude * .pi / 180.0)) * (180.0 / .pi)
+            let resolvedHeading = heading ?? lastValidHeading ?? 0.0
+            lastValidHeading = resolvedHeading
 
-            result.append(CLLocationCoordinate2D(
-                latitude: p.latitude + latOffset,
-                longitude: p.longitude + lonOffset
-            ))
+            // 90 degrees clockwise (right-hand sidewalk relative to forward travel)
+            let perpBearingRad = ((resolvedHeading + 90.0) * .pi) / 180.0
+            let eastOffset = offsetMeters * sin(perpBearingRad)
+            let northOffset = offsetMeters * cos(perpBearingRad)
+            result.append(RouteSimulationEngine.offsetCoordinate(p, eastMeters: eastOffset, northMeters: northOffset))
         }
         return result
     }
@@ -216,24 +229,27 @@ enum RouteBuilder {
         waypoints: [CLLocationCoordinate2D],
         mode: TravelMode
     ) async throws -> [CLLocationCoordinate2D] {
-        guard waypoints.count >= 2 else { return waypoints }
-        if waypoints.count == 2 {
-            return try await roadRoute(from: waypoints[0], to: waypoints[1], mode: mode)
+        let valid = waypoints.filter { RouteSimulationEngine.isValidCoordinate($0) }
+        guard valid.count >= 2 else { return valid }
+        if valid.count == 2 {
+            return try await roadRoute(from: valid[0], to: valid[1], mode: mode)
         }
 
         var fullRoute: [CLLocationCoordinate2D] = []
-        for i in 0..<(waypoints.count - 1) {
-            let start = waypoints[i]
-            let end = waypoints[i + 1]
+        for i in 0..<(valid.count - 1) {
+            let start = valid[i]
+            let end = valid[i + 1]
+            if RouteSimulationEngine.haversineDistance(from: start, to: end) < 0.5 {
+                continue
+            }
             let leg = try await roadRoute(from: start, to: end, mode: mode)
             if fullRoute.isEmpty {
                 fullRoute.append(contentsOf: leg)
             } else {
-                // Drop duplicate connecting point
                 fullRoute.append(contentsOf: leg.dropFirst())
             }
         }
-        return fullRoute
+        return fullRoute.isEmpty ? valid : fullRoute
     }
 
     // MARK: - Multi-Point Straight Route (Points Method)
@@ -242,8 +258,9 @@ enum RouteBuilder {
         waypoints: [CLLocationCoordinate2D],
         every meters: CLLocationDistance = 8
     ) -> [CLLocationCoordinate2D] {
-        guard waypoints.count >= 2 else { return waypoints }
-        return sample(coordinates: waypoints, every: meters)
+        let valid = waypoints.filter { RouteSimulationEngine.isValidCoordinate($0) }
+        guard valid.count >= 2 else { return valid }
+        return sample(coordinates: valid, every: meters)
     }
 
     // MARK: - Freehand Path Processor (Freehand Method)
@@ -254,19 +271,18 @@ enum RouteBuilder {
         sampleMeters: CLLocationDistance = 6,
         smooth: Bool = true
     ) -> [CLLocationCoordinate2D] {
-        guard coordinates.count >= 2 else { return coordinates }
+        let valid = coordinates.filter { RouteSimulationEngine.isValidCoordinate($0) }
+        guard valid.count >= 2 else { return valid }
 
         // 1. Remove micro-duplicates (touches closer than 1.5m)
-        var deduped: [CLLocationCoordinate2D] = [coordinates[0]]
-        for pt in coordinates.dropFirst() {
-            let prev = deduped.last!
-            let d = CLLocation(latitude: prev.latitude, longitude: prev.longitude)
-                .distance(from: CLLocation(latitude: pt.latitude, longitude: pt.longitude))
-            if d >= 1.5 {
+        var deduped: [CLLocationCoordinate2D] = [valid[0]]
+        for pt in valid.dropFirst() {
+            if let prev = deduped.last,
+               RouteSimulationEngine.haversineDistance(from: prev, to: pt) >= 1.5 {
                 deduped.append(pt)
             }
         }
-        guard deduped.count >= 2 else { return coordinates }
+        guard deduped.count >= 2 else { return deduped }
 
         // 2. Apply moving average smoothing if requested
         let smoothed: [CLLocationCoordinate2D]
@@ -284,8 +300,9 @@ enum RouteBuilder {
         _ points: [CLLocationCoordinate2D],
         window: Int = 3
     ) -> [CLLocationCoordinate2D] {
-        guard points.count > window else { return points }
+        guard points.count > window, window >= 1 else { return points }
         var result: [CLLocationCoordinate2D] = []
+        result.reserveCapacity(points.count)
         result.append(points[0])
 
         let half = window / 2
@@ -293,72 +310,151 @@ enum RouteBuilder {
             let start = max(0, i - half)
             let end = min(points.count - 1, i + half)
             let count = Double(end - start + 1)
+            let anchor = points[i]
             var latSum = 0.0
-            var lonSum = 0.0
+            var dLonSum = 0.0
             for j in start...end {
                 latSum += points[j].latitude
-                lonSum += points[j].longitude
+                // Unwrap longitude delta relative to anchor so paths crossing +-180° smooth cleanly
+                dLonSum += RouteSimulationEngine.normalizeLongitude(points[j].longitude - anchor.longitude)
             }
-            result.append(CLLocationCoordinate2D(latitude: latSum / count, longitude: lonSum / count))
+            let avgLat = min(90.0, max(-90.0, latSum / count))
+            let avgLon = RouteSimulationEngine.normalizeLongitude(anchor.longitude + (dLonSum / count))
+            result.append(CLLocationCoordinate2D(latitude: avgLat, longitude: avgLon))
         }
 
-        result.append(points.last!)
+        if let last = points.last {
+            result.append(last)
+        }
         return result
     }
 
     // MARK: - Sampling & Interpolation
 
+    private static let minimumSampleSpacingMeters: CLLocationDistance = 0.5
+    private static let maximumStepsPerSegment: Int = 50_000
+
     static func sample(polyline: MKPolyline, every meters: CLLocationDistance) -> [CLLocationCoordinate2D] {
+        guard polyline.pointCount > 0 else { return [] }
         var coords = [CLLocationCoordinate2D](repeating: .init(), count: polyline.pointCount)
         polyline.getCoordinates(&coords, range: NSRange(location: 0, length: polyline.pointCount))
         return sample(coordinates: coords, every: meters)
     }
 
+    /// Safely samples a polyline at approximate Great Circle intervals of `meters`.
+    /// Validates spacing (zero/negative/NaN/Inf), avoids duplicate points, and prevents Int overflow.
     static func sample(coordinates: [CLLocationCoordinate2D], every meters: CLLocationDistance) -> [CLLocationCoordinate2D] {
-        guard coordinates.count > 1 else { return coordinates }
-        var sampled = [coordinates[0]]
-        for (a, b) in zip(coordinates, coordinates.dropFirst()) {
-            let dist = CLLocation(latitude: a.latitude, longitude: a.longitude)
-                .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
-            let steps = max(1, Int(ceil(dist / meters)))
-            for i in 1...steps {
-                let t = Double(i) / Double(steps)
-                sampled.append(CLLocationCoordinate2D(
-                    latitude: a.latitude + (b.latitude - a.latitude) * t,
-                    longitude: a.longitude + (b.longitude - a.longitude) * t
-                ))
+        let valid = coordinates.filter { RouteSimulationEngine.isValidCoordinate($0) }
+        guard valid.count > 1 else { return valid }
+
+        // Deduplicate micro-identical consecutive vertices first
+        var deduped: [CLLocationCoordinate2D] = [valid[0]]
+        for pt in valid.dropFirst() {
+            if let prev = deduped.last,
+               RouteSimulationEngine.haversineDistance(from: prev, to: pt) >= 0.01 {
+                deduped.append(pt)
             }
         }
+        guard deduped.count > 1 else { return deduped }
+
+        // If spacing is invalid (<= 0, NaN, infinite), do not crash or subdivide blindly:
+        // return cleaned, deduplicated vertices safely.
+        guard meters.isFinite, meters > 0 else {
+            return deduped
+        }
+
+        let effectiveSpacing = max(minimumSampleSpacingMeters, meters)
+        var sampled: [CLLocationCoordinate2D] = [deduped[0]]
+
+        for (a, b) in zip(deduped, deduped.dropFirst()) {
+            let dist = RouteSimulationEngine.haversineDistance(from: a, to: b)
+            guard dist.isFinite, dist >= 0.01 else { continue }
+
+            let ratio = dist / effectiveSpacing
+            let steps: Int
+            if !ratio.isFinite || ratio >= Double(maximumStepsPerSegment) {
+                steps = maximumStepsPerSegment
+            } else {
+                steps = max(1, Int(ceil(ratio)))
+            }
+
+            for i in 1...steps {
+                let t = Double(i) / Double(steps)
+                let interpolated = (i == steps)
+                    ? b
+                    : RouteSimulationEngine.interpolateGreatCircle(from: a, to: b, fraction: t)
+                if let last = sampled.last,
+                   RouteSimulationEngine.haversineDistance(from: last, to: interpolated) < 1e-4 {
+                    continue
+                }
+                sampled.append(interpolated)
+            }
+        }
+
         return sampled
+    }
+
+    /// Samples each continuous coordinate segment independently without connecting separate segments.
+    static func sample(coordinateSegments segments: [[CLLocationCoordinate2D]], every meters: CLLocationDistance) -> [[CLLocationCoordinate2D]] {
+        segments.compactMap { seg in
+            let res = sample(coordinates: seg, every: meters)
+            return res.isEmpty ? nil : res
+        }
+    }
+
+    /// Samples a GPX track per segment while preserving track name and segment boundaries.
+    static func sample(track: GPXTrack, every meters: CLLocationDistance) -> GPXTrack {
+        let sampledSegments: [[GPXTrackPoint]] = track.segments.compactMap { seg in
+            let coords = sample(coordinates: seg.map(\.coordinate), every: meters)
+            guard !coords.isEmpty else { return nil }
+            return coords.map { GPXTrackPoint(coordinate: $0) }
+        }
+        return GPXTrack(name: track.name, segments: sampledSegments)
     }
 
     // MARK: - Metrics & Formatting
 
     static func totalDistance(of coordinates: [CLLocationCoordinate2D]) -> CLLocationDistance {
-        guard coordinates.count > 1 else { return 0 }
+        let valid = coordinates.filter { RouteSimulationEngine.isValidCoordinate($0) }
+        guard valid.count > 1 else { return 0 }
         var total: CLLocationDistance = 0
-        for (a, b) in zip(coordinates, coordinates.dropFirst()) {
-            total += CLLocation(latitude: a.latitude, longitude: a.longitude)
-                .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+        for (a, b) in zip(valid, valid.dropFirst()) {
+            let d = RouteSimulationEngine.haversineDistance(from: a, to: b)
+            if d.isFinite && d > 0 {
+                total += d
+            }
         }
         return total
     }
 
+    /// Computes total track distance across disjoint segments without bridging across segment gaps.
+    static func totalDistance(ofSegments segments: [[CLLocationCoordinate2D]]) -> CLLocationDistance {
+        segments.reduce(0.0) { $0 + totalDistance(of: $1) }
+    }
+
+    static func totalDistance(of track: GPXTrack) -> CLLocationDistance {
+        totalDistance(ofSegments: track.coordinateSegments)
+    }
+
     static func formattedDistance(_ meters: CLLocationDistance) -> String {
-        if meters < 1000 {
-            return String(format: "%.0f m", meters)
+        let safeMeters = (meters.isFinite && meters >= 0) ? meters : 0
+        if safeMeters < 1000 {
+            return String(format: "%.0f m", safeMeters)
         } else {
-            return String(format: "%.2f km", meters / 1000.0)
+            return String(format: "%.2f km", safeMeters / 1000.0)
         }
     }
 
     static func estimatedDuration(distance: CLLocationDistance, speed: CLLocationSpeed) -> TimeInterval {
-        guard speed > 0.1 else { return 0 }
-        return distance / speed
+        guard distance.isFinite, distance > 0, speed.isFinite, speed > 0.1 else { return 0 }
+        let secs = distance / speed
+        return secs.isFinite ? secs : 0
     }
 
     static func formattedDuration(_ seconds: TimeInterval) -> String {
-        let totalSeconds = Int(seconds)
+        guard seconds.isFinite, seconds >= 0 else { return "0s" }
+        let clamped = min(Double(Int.max / 2), seconds)
+        let totalSeconds = Int(clamped)
         let hours = totalSeconds / 3600
         let minutes = (totalSeconds % 3600) / 60
         let secs = totalSeconds % 60
@@ -373,9 +469,10 @@ enum RouteBuilder {
     }
 
     static func formattedETA(_ seconds: TimeInterval) -> String {
-        guard seconds > 1 else { return "< 1m" }
-        let durationStr = formattedDuration(seconds)
-        let arrivalDate = Date().addingTimeInterval(seconds)
+        guard seconds.isFinite, seconds > 1 else { return "< 1m" }
+        let clamped = min(86400.0 * 30.0, seconds)
+        let durationStr = formattedDuration(clamped)
+        let arrivalDate = Date().addingTimeInterval(clamped)
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         let timeStr = formatter.string(from: arrivalDate)
@@ -392,7 +489,7 @@ struct GPXTrackPoint: Equatable {
 
     init(coordinate: CLLocationCoordinate2D, elevation: Double? = nil, time: Date? = nil) {
         self.coordinate = coordinate
-        self.elevation = elevation
+        self.elevation = (elevation?.isFinite == true) ? elevation : nil
         self.time = time
     }
 
@@ -407,6 +504,13 @@ struct GPXTrackPoint: Equatable {
 struct GPXTrack: Equatable {
     var name: String?
     var segments: [[GPXTrackPoint]]
+
+    var coordinateSegments: [[CLLocationCoordinate2D]] {
+        segments.compactMap { seg in
+            let coords = seg.map(\.coordinate).filter { RouteSimulationEngine.isValidCoordinate($0) }
+            return coords.isEmpty ? nil : coords
+        }
+    }
 
     var coordinates: [CLLocationCoordinate2D] {
         segments.flatMap { $0.map(\.coordinate) }
@@ -476,6 +580,9 @@ enum GPXCodec {
     }
 
     static func export(_ track: GPXTrack) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+
         var xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <gpx version="1.1" creator="Locus" xmlns="http://www.topografix.com/GPX/1/1">
@@ -483,10 +590,11 @@ enum GPXCodec {
             <name>\(xmlEscape(track.name?.isEmpty == false ? track.name! : "Locus Route"))</name>
 
         """
-        let segmentsToWrite = track.segments.isEmpty ? [[]] : track.segments
+        let nonEmptySegments = track.segments.filter { !$0.isEmpty }
+        let segmentsToWrite = nonEmptySegments.isEmpty ? [[]] : nonEmptySegments
         for segment in segmentsToWrite {
             xml += "    <trkseg>\n"
-            for point in segment {
+            for point in segment where RouteSimulationEngine.isValidCoordinate(point.coordinate) {
                 xml += "      <trkpt lat=\"\(coordinateString(point.coordinate.latitude))\" lon=\"\(coordinateString(point.coordinate.longitude))\">"
                 var wroteChild = false
                 if let elevation = point.elevation, elevation.isFinite {
@@ -494,7 +602,7 @@ enum GPXCodec {
                     wroteChild = true
                 }
                 if let time = point.time {
-                    xml += "\n        <time>\(isoFormatter.string(from: time))</time>"
+                    xml += "\n        <time>\(formatter.string(from: time))</time>"
                     wroteChild = true
                 }
                 xml += wroteChild ? "\n      </trkpt>\n" : "</trkpt>\n"
@@ -509,8 +617,18 @@ enum GPXCodec {
     }
 
     static func export(_ coordinates: [CLLocationCoordinate2D], name: String = "Locus Route") -> String {
-        let points = coordinates.map { GPXTrackPoint(coordinate: $0) }
+        let points = coordinates
+            .filter { RouteSimulationEngine.isValidCoordinate($0) }
+            .map { GPXTrackPoint(coordinate: $0) }
         return export(GPXTrack(name: name, segments: [points]))
+    }
+
+    static func export(coordinateSegments segments: [[CLLocationCoordinate2D]], name: String = "Locus Route") -> String {
+        let gpxSegments = segments.compactMap { seg -> [GPXTrackPoint]? in
+            let pts = seg.filter { RouteSimulationEngine.isValidCoordinate($0) }.map { GPXTrackPoint(coordinate: $0) }
+            return pts.isEmpty ? nil : pts
+        }
+        return export(GPXTrack(name: name, segments: gpxSegments))
     }
 
     private static func coordinateString(_ value: Double) -> String {
@@ -520,12 +638,6 @@ enum GPXCodec {
     private static func elevationString(_ value: Double) -> String {
         String(format: "%.2f", value)
     }
-
-    private static let isoFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
 }
 
 private final class GPXParserDelegate: NSObject, XMLParserDelegate {
@@ -544,18 +656,27 @@ private final class GPXParserDelegate: NSObject, XMLParserDelegate {
 
     private(set) var validationError: GPXError?
 
-    private static let isoFormatterFractional: ISO8601DateFormatter = {
+    // Instance-owned formatters keep concurrent GPXCodec parses completely thread-safe
+    private let isoFormatterFractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
-    private static let isoFormatter = ISO8601DateFormatter()
+    private let isoFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 
-    func buildTrack() -> GPXTrack {
+    private func flushCurrentSegment() {
         if !currentSegment.isEmpty {
             segments.append(currentSegment)
             currentSegment = []
         }
+    }
+
+    func buildTrack() -> GPXTrack {
+        flushCurrentSegment()
         return GPXTrack(name: trackName, segments: segments)
     }
 
@@ -572,25 +693,22 @@ private final class GPXParserDelegate: NSObject, XMLParserDelegate {
         currentText = ""
 
         switch name {
-        case "trkseg":
-            if !currentSegment.isEmpty {
-                segments.append(currentSegment)
-                currentSegment = []
-            }
+        case "trk", "trkseg":
+            flushCurrentSegment()
         case "trkpt":
             insideTrkpt = true
             pendingElevation = nil
             pendingTime = nil
-            let latText = attributeDict["lat"] ?? ""
-            let lonText = attributeDict["lon"] ?? ""
-            guard let lat = Double(latText), let lon = Double(lonText),
+            let latRaw = attributeDict["lat"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let lonRaw = attributeDict["lon"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let lat = Double(latRaw), let lon = Double(lonRaw),
                   lat.isFinite, lon.isFinite,
                   (-90...90).contains(lat), (-180...180).contains(lon) else {
                 pendingLat = nil
                 pendingLon = nil
                 validationError = .invalidCoordinate(
-                    lat: attributeDict["lat"] ?? "missing",
-                    lon: attributeDict["lon"] ?? "missing"
+                    lat: latRaw.isEmpty ? "missing" : latRaw,
+                    lon: lonRaw.isEmpty ? "missing" : lonRaw
                 )
                 return
             }
@@ -618,16 +736,16 @@ private final class GPXParserDelegate: NSObject, XMLParserDelegate {
 
         switch name {
         case "name":
-            if elementStack.count >= 2, elementStack[elementStack.count - 2] == "trk", !text.isEmpty {
+            if trackName == nil, elementStack.count >= 2, elementStack[elementStack.count - 2] == "trk", !text.isEmpty {
                 trackName = text
             }
         case "ele":
-            if insideTrkpt, let value = Double(text), value.isFinite {
+            if insideTrkpt, !text.isEmpty, let value = Double(text), value.isFinite {
                 pendingElevation = value
             }
         case "time":
-            if insideTrkpt {
-                pendingTime = Self.isoFormatterFractional.date(from: text) ?? Self.isoFormatter.date(from: text)
+            if insideTrkpt, !text.isEmpty {
+                pendingTime = isoFormatterFractional.date(from: text) ?? isoFormatter.date(from: text)
             }
         case "trkpt":
             if let lat = pendingLat, let lon = pendingLon {
@@ -642,6 +760,8 @@ private final class GPXParserDelegate: NSObject, XMLParserDelegate {
             pendingLon = nil
             pendingElevation = nil
             pendingTime = nil
+        case "trkseg", "trk":
+            flushCurrentSegment()
         default:
             break
         }

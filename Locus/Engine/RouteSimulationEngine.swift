@@ -84,32 +84,95 @@ public final class RouteSimulationEngine {
 
     // MARK: - Great Circle & Haversine Geodesic Math
 
-    private static let earthRadiusMeters: Double = 6371008.8
+    public static let earthRadiusMeters: Double = 6371008.8
+
+    /// Returns true if latitude and longitude are finite and within valid WGS84 bounds.
+    public static func isValidCoordinate(_ coordinate: CLLocationCoordinate2D) -> Bool {
+        coordinate.latitude.isFinite
+            && coordinate.longitude.isFinite
+            && (-90.0...90.0).contains(coordinate.latitude)
+            && (-180.0...180.0).contains(coordinate.longitude)
+    }
+
+    /// Normalizes a longitude in degrees into [-180, 180].
+    public static func normalizeLongitude(_ longitude: Double) -> Double {
+        guard longitude.isFinite else { return 0.0 }
+        var lon = longitude.truncatingRemainder(dividingBy: 360.0)
+        if lon > 180.0 { lon -= 360.0 }
+        if lon < -180.0 { lon += 360.0 }
+        return lon
+    }
+
+    /// Clamps latitude to [-90, 90] and wraps longitude cleanly across the antimeridian.
+    public static func clampAndNormalize(_ coordinate: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
+        let lat = coordinate.latitude.isFinite ? min(90.0, max(-90.0, coordinate.latitude)) : 0.0
+        let lon = normalizeLongitude(coordinate.longitude)
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    /// Normalizes an azimuth bearing into [0, 360).
+    public static func normalizeBearing(_ degrees: Double) -> Double {
+        guard degrees.isFinite else { return 0.0 }
+        let mod = degrees.truncatingRemainder(dividingBy: 360.0)
+        let normalized = mod >= 0 ? mod : mod + 360.0
+        return normalized >= 360.0 ? 0.0 : normalized
+    }
+
+    /// Offsets a coordinate by local East/North meters safely across latitudes and the antimeridian.
+    public static func offsetCoordinate(
+        _ coordinate: CLLocationCoordinate2D,
+        eastMeters: Double,
+        northMeters: Double
+    ) -> CLLocationCoordinate2D {
+        guard isValidCoordinate(coordinate) else {
+            return CLLocationCoordinate2D(latitude: 0, longitude: 0)
+        }
+        let safeNorth = northMeters.isFinite ? northMeters : 0.0
+        let safeEast = eastMeters.isFinite ? eastMeters : 0.0
+
+        let latRad = coordinate.latitude * .pi / 180.0
+        let dLat = (safeNorth / earthRadiusMeters) * (180.0 / .pi)
+        let newLat = min(90.0, max(-90.0, coordinate.latitude + dLat))
+
+        // Prevent division by near-zero cos(lat) at geographic poles
+        let safeCosLat = max(1e-4, cos(latRad))
+        let dLon = (safeEast / (earthRadiusMeters * safeCosLat)) * (180.0 / .pi)
+        let newLon = normalizeLongitude(coordinate.longitude + dLon)
+
+        return CLLocationCoordinate2D(latitude: newLat, longitude: newLon)
+    }
 
     /// High-precision Haversine Great Circle distance between two coordinates in meters.
     public static func haversineDistance(from c1: CLLocationCoordinate2D, to c2: CLLocationCoordinate2D) -> CLLocationDistance {
+        guard isValidCoordinate(c1), isValidCoordinate(c2) else { return 0.0 }
         let lat1 = c1.latitude * .pi / 180.0
         let lat2 = c2.latitude * .pi / 180.0
         let dLat = (c2.latitude - c1.latitude) * .pi / 180.0
         let dLon = (c2.longitude - c1.longitude) * .pi / 180.0
 
-        let a = sin(dLat / 2.0) * sin(dLat / 2.0) +
-                cos(lat1) * cos(lat2) * sin(dLon / 2.0) * sin(dLon / 2.0)
+        let rawA = sin(dLat / 2.0) * sin(dLat / 2.0) +
+                   cos(lat1) * cos(lat2) * sin(dLon / 2.0) * sin(dLon / 2.0)
+        let a = min(1.0, max(0.0, rawA))
         let c = 2.0 * atan2(sqrt(a), sqrt(max(0.0, 1.0 - a)))
-        return earthRadiusMeters * c
+        let result = earthRadiusMeters * c
+        return result.isFinite ? max(0.0, result) : 0.0
     }
 
     /// Mathematical forward azimuth (course/heading degrees: 0° North, 90° East, 180° South, 270° West).
     public static func greatCircleBearing(from c1: CLLocationCoordinate2D, to c2: CLLocationCoordinate2D) -> Double {
+        guard isValidCoordinate(c1), isValidCoordinate(c2) else { return 0.0 }
+        if abs(c1.latitude - c2.latitude) < 1e-12 && abs(c1.longitude - c2.longitude) < 1e-12 {
+            return 0.0
+        }
         let lat1 = c1.latitude * .pi / 180.0
         let lat2 = c2.latitude * .pi / 180.0
         let dLon = (c2.longitude - c1.longitude) * .pi / 180.0
 
         let y = sin(dLon) * cos(lat2)
         let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+        if abs(x) < 1e-15 && abs(y) < 1e-15 { return 0.0 }
         let radians = atan2(y, x)
-        let degrees = (radians * 180.0 / .pi).truncatingRemainder(dividingBy: 360.0)
-        return degrees >= 0 ? degrees : degrees + 360.0
+        return normalizeBearing(radians * 180.0 / .pi)
     }
 
     /// Great Circle spherical linear interpolation (Slerp) along the Earth's geodesic arc.
@@ -118,9 +181,16 @@ public final class RouteSimulationEngine {
         to c2: CLLocationCoordinate2D,
         fraction: Double
     ) -> CLLocationCoordinate2D {
-        let t = min(1.0, max(0.0, fraction))
-        if t <= 0.00001 { return c1 }
-        if t >= 0.99999 { return c2 }
+        let valid1 = isValidCoordinate(c1)
+        let valid2 = isValidCoordinate(c2)
+        guard valid1 || valid2 else { return CLLocationCoordinate2D(latitude: 0, longitude: 0) }
+        if !valid1 { return clampAndNormalize(c2) }
+        if !valid2 { return clampAndNormalize(c1) }
+
+        let safeFraction = fraction.isFinite ? fraction : 0.0
+        let t = min(1.0, max(0.0, safeFraction))
+        if t <= 1e-6 { return c1 }
+        if t >= 1.0 - 1e-6 { return c2 }
 
         let lat1 = c1.latitude * .pi / 180.0
         let lon1 = c1.longitude * .pi / 180.0
@@ -128,9 +198,16 @@ public final class RouteSimulationEngine {
         let lon2 = c2.longitude * .pi / 180.0
 
         let delta = haversineDistance(from: c1, to: c2) / earthRadiusMeters
-        if delta < 1e-8 { return c1 }
+        if delta < 1e-9 { return c1 }
 
         let sinDelta = sin(delta)
+        // Guard near-antipodal points where sin(delta) approaches 0
+        if abs(sinDelta) < 1e-9 {
+            let midLat = min(90.0, max(-90.0, c1.latitude + (c2.latitude - c1.latitude) * t))
+            let midLon = normalizeLongitude(c1.longitude + normalizeLongitude(c2.longitude - c1.longitude) * t)
+            return CLLocationCoordinate2D(latitude: midLat, longitude: midLon)
+        }
+
         let a = sin((1.0 - t) * delta) / sinDelta
         let b = sin(t * delta) / sinDelta
 
@@ -141,16 +218,19 @@ public final class RouteSimulationEngine {
         let outLat = atan2(z, sqrt(x * x + y * y))
         let outLon = atan2(y, x)
 
-        return CLLocationCoordinate2D(
+        return clampAndNormalize(CLLocationCoordinate2D(
             latitude: outLat * 180.0 / .pi,
             longitude: outLon * 180.0 / .pi
-        )
+        ))
     }
 
     /// Computes the angle difference in degrees between two bearings (0...180).
     public static func turnAngleBetween(bearing1: Double, bearing2: Double) -> Double {
-        let diff = abs(bearing1 - bearing2).truncatingRemainder(dividingBy: 360.0)
-        return diff > 180 ? 360 - diff : diff
+        guard bearing1.isFinite, bearing2.isFinite else { return 0.0 }
+        let b1 = normalizeBearing(bearing1)
+        let b2 = normalizeBearing(bearing2)
+        let diff = abs(b1 - b2).truncatingRemainder(dividingBy: 360.0)
+        return diff > 180.0 ? 360.0 - diff : diff
     }
 
     // MARK: - Dynamic Speed Profiler & Kinematics
@@ -162,27 +242,36 @@ public final class RouteSimulationEngine {
         turnAngleDegrees: Double,
         elapsedSeconds: Double
     ) -> Double {
-        let dt = max(0.1, min(2.0, elapsedSeconds))
+        let safeElapsed = elapsedSeconds.isFinite ? min(5.0, max(0.0, elapsedSeconds)) : 1.0
+        if !currentFilteredSpeedMPS.isFinite || currentFilteredSpeedMPS < 0 {
+            currentFilteredSpeedMPS = 0.0
+        }
+        if safeElapsed == 0 {
+            return max(0.4, currentFilteredSpeedMPS)
+        }
+
+        let dt = max(0.05, safeElapsed)
+        let safeTurn = turnAngleDegrees.isFinite ? abs(turnAngleDegrees) : 0.0
+        let safeBase = (baseSpeedMPS.isFinite && baseSpeedMPS > 0) ? baseSpeedMPS : travelMode.baseSpeed
 
         // 1. Turn-adaptive speed scaling (real vehicles slow down on turns)
-        var targetMPS = baseSpeedMPS
+        var targetMPS = safeBase
         if travelMode == .drive || travelMode == .bus {
-            if turnAngleDegrees > 60 {
+            if safeTurn > 60 {
                 // Hard 60-90° turn: slow down to ~15–18 mph (6.7–8.0 m/s)
-                let turnCornerSpeedMPS = min(targetMPS, 7.5)
-                targetMPS = turnCornerSpeedMPS
-            } else if turnAngleDegrees > 30 {
+                targetMPS = min(targetMPS, 7.5)
+            } else if safeTurn > 30 {
                 // Moderate turn: slow down to ~22 mph (9.8 m/s)
-                let moderateTurnSpeedMPS = min(targetMPS, 9.8)
-                targetMPS = moderateTurnSpeedMPS
+                targetMPS = min(targetMPS, 9.8)
             }
         }
 
         // 2. Realistic Dynamic Random Speed Fluctuation within 1–5 mph range
         if enableRandomSpeedFluctuations {
-            let maxVarianceMPH = min(5.0, max(1.0, speedVarianceRangeMPH))
+            let maxVarianceMPH = min(5.0, max(1.0, speedVarianceRangeMPH.isFinite ? speedVarianceRangeMPH : 3.0))
             // Dynamic driver throttle wave with organic Brownian perturbation
             throttlePhase += dt * 0.45
+            if throttlePhase > 1_000_000 { throttlePhase = throttlePhase.truncatingRemainder(dividingBy: 2.0 * .pi) }
             let primaryWave = sin(throttlePhase) * 0.70
             let harmonicWave = sin(throttlePhase * 2.3) * 0.22
             let microJitter = Double.random(in: -0.12...0.12)
@@ -236,13 +325,14 @@ public final class RouteSimulationEngine {
         // 4. Cadence micro-fluctuation for human walking/running
         if travelMode == .walk || travelMode == .sidewalk {
             stepCadencePhase += dt * 3.2 // ~110 steps/min
+            if stepCadencePhase > 1_000_000 { stepCadencePhase = stepCadencePhase.truncatingRemainder(dividingBy: 2.0 * .pi) }
             let cadenceFactor = 1.0 + (sin(stepCadencePhase) * 0.04)
             currentFilteredSpeedMPS *= cadenceFactor
             // Strictly guard walking at 1–2 mph (0.45–0.90 m/s)
             currentFilteredSpeedMPS = min(0.95, max(0.42, currentFilteredSpeedMPS))
         }
 
-        return max(0.4, currentFilteredSpeedMPS)
+        return currentFilteredSpeedMPS.isFinite ? max(0.4, currentFilteredSpeedMPS) : max(0.4, safeBase)
     }
 
     // MARK: - Telemetry Realism & GPS Jitter Injection
@@ -256,16 +346,19 @@ public final class RouteSimulationEngine {
         travelMode: TravelMode,
         stateTitle: String = "In Motion"
     ) -> TelemetryPayload {
-        lastValidHeading = headingDegrees
-        let speedMPH = speedMPS * 2.236936
+        let safeRaw = Self.clampAndNormalize(rawCoordinate)
+        let safeHeading = Self.normalizeBearing(headingDegrees.isFinite ? headingDegrees : lastValidHeading)
+        let safeSpeed = (speedMPS.isFinite && speedMPS > 0) ? speedMPS : 0.1
+        lastValidHeading = safeHeading
+        let speedMPH = safeSpeed * 2.236936
 
-        guard enableGPSJitter else {
+        guard enableGPSJitter, Self.isValidCoordinate(rawCoordinate) else {
             return TelemetryPayload(
-                coordinate: rawCoordinate,
-                rawCoordinate: rawCoordinate,
-                speedMPS: speedMPS,
+                coordinate: safeRaw,
+                rawCoordinate: safeRaw,
+                speedMPS: safeSpeed,
                 speedMPH: speedMPH,
-                courseDegrees: headingDegrees,
+                courseDegrees: safeHeading,
                 stateTitle: stateTitle
             )
         }
@@ -280,20 +373,14 @@ public final class RouteSimulationEngine {
         let microCross = Double.random(in: -0.30...0.30)
         let microAlong = Double.random(in: -0.10...0.10)
 
-        let headingRad = headingDegrees * .pi / 180.0
+        let headingRad = safeHeading * .pi / 180.0
         let alongMeters = totalAlong + microAlong
         let crossMeters = totalCross + microCross
 
         let eastMeters = (alongMeters * sin(headingRad)) + (crossMeters * cos(headingRad))
         let northMeters = (alongMeters * cos(headingRad)) - (crossMeters * sin(headingRad))
 
-        let dLat = (northMeters / Self.earthRadiusMeters) * (180.0 / .pi)
-        let dLon = (eastMeters / (Self.earthRadiusMeters * cos(rawCoordinate.latitude * .pi / 180.0))) * (180.0 / .pi)
-
-        let jitteredCoordinate = CLLocationCoordinate2D(
-            latitude: rawCoordinate.latitude + dLat,
-            longitude: rawCoordinate.longitude + dLon
-        )
+        let jitteredCoordinate = Self.offsetCoordinate(safeRaw, eastMeters: eastMeters, northMeters: northMeters)
 
         // Realistic horizontal accuracy (varies smoothly between 4.2m and 6.8m)
         let horizAcc = 5.0 + Double.random(in: -0.7...1.2)
@@ -301,13 +388,418 @@ public final class RouteSimulationEngine {
 
         return TelemetryPayload(
             coordinate: jitteredCoordinate,
-            rawCoordinate: rawCoordinate,
-            speedMPS: speedMPS,
+            rawCoordinate: safeRaw,
+            speedMPS: safeSpeed,
             speedMPH: speedMPH,
-            courseDegrees: headingDegrees,
+            courseDegrees: safeHeading,
             horizontalAccuracy: horizAcc,
             verticalAccuracy: vertAcc,
             stateTitle: stateTitle
         )
     }
 }
+
+// MARK: - Route Playback Engine (Pure Segment-Accurate Stepper & Session Coordinator)
+
+/// A directed geodesic edge inside a continuous track segment.
+public struct RouteEdge: Equatable {
+    public let start: CLLocationCoordinate2D
+    public let end: CLLocationCoordinate2D
+    public let trackSegmentIndex: Int
+    public let localStartPointIndex: Int
+    public let distanceMeters: Double
+    public let bearingDegrees: Double
+
+    public static func == (lhs: RouteEdge, rhs: RouteEdge) -> Bool {
+        lhs.start.latitude == rhs.start.latitude
+            && lhs.start.longitude == rhs.start.longitude
+            && lhs.end.latitude == rhs.end.latitude
+            && lhs.end.longitude == rhs.end.longitude
+            && lhs.trackSegmentIndex == rhs.trackSegmentIndex
+            && lhs.localStartPointIndex == rhs.localStartPointIndex
+            && lhs.distanceMeters == rhs.distanceMeters
+            && lhs.bearingDegrees == rhs.bearingDegrees
+    }
+}
+
+/// Cleaned, validated multi-segment route representation used by both UI/playback and unit tests.
+/// Preserves disjoint `<trkseg>` boundaries so unrelated GPX segments are never connected by a fake line.
+public struct RoutePlaybackPlan: Equatable {
+    public let coordinateSegments: [[CLLocationCoordinate2D]]
+    public let edges: [RouteEdge]
+    public let suffixDistances: [Double] // suffixDistances[i] = sum of edge distances for i..<edges.count
+    public let totalDistance: Double
+    public let flattenedCoordinates: [CLLocationCoordinate2D]
+
+    public var isPlayable: Bool { !edges.isEmpty }
+    public var startCoordinate: CLLocationCoordinate2D? {
+        edges.first?.start ?? coordinateSegments.first?.first
+    }
+    public var endCoordinate: CLLocationCoordinate2D? {
+        edges.last?.end ?? coordinateSegments.last?.last
+    }
+
+    public init(coordinates: [CLLocationCoordinate2D]) {
+        self.init(coordinateSegments: [coordinates])
+    }
+
+    public init(coordinateSegments rawSegments: [[CLLocationCoordinate2D]]) {
+        var cleanedSegments: [[CLLocationCoordinate2D]] = []
+        var builtEdges: [RouteEdge] = []
+
+        for rawSegment in rawSegments {
+            let validPoints = rawSegment.filter { RouteSimulationEngine.isValidCoordinate($0) }
+            guard !validPoints.isEmpty else { continue }
+
+            var deduped: [CLLocationCoordinate2D] = [validPoints[0]]
+            for pt in validPoints.dropFirst() {
+                if let prev = deduped.last {
+                    let dist = RouteSimulationEngine.haversineDistance(from: prev, to: pt)
+                    if dist >= 1e-3 {
+                        deduped.append(pt)
+                    }
+                }
+            }
+
+            let trackSegIdx = cleanedSegments.count
+            cleanedSegments.append(deduped)
+
+            guard deduped.count >= 2 else { continue }
+            for i in 0..<(deduped.count - 1) {
+                let p0 = deduped[i]
+                let p1 = deduped[i + 1]
+                let dist = RouteSimulationEngine.haversineDistance(from: p0, to: p1)
+                guard dist >= 1e-3 else { continue }
+                let bearing = RouteSimulationEngine.greatCircleBearing(from: p0, to: p1)
+                builtEdges.append(RouteEdge(
+                    start: p0,
+                    end: p1,
+                    trackSegmentIndex: trackSegIdx,
+                    localStartPointIndex: i,
+                    distanceMeters: dist,
+                    bearingDegrees: bearing
+                ))
+            }
+        }
+
+        // Compute suffix sums indexed by edge index (size edges.count + 1)
+        var suffixes = [Double](repeating: 0.0, count: builtEdges.count + 1)
+        for i in stride(from: builtEdges.count - 1, through: 0, by: -1) {
+            suffixes[i] = suffixes[i + 1] + builtEdges[i].distanceMeters
+        }
+
+        self.coordinateSegments = cleanedSegments
+        self.edges = builtEdges
+        self.suffixDistances = suffixes
+        self.totalDistance = suffixes.first ?? 0.0
+        self.flattenedCoordinates = cleanedSegments.flatMap { $0 }
+    }
+
+    public static func == (lhs: RoutePlaybackPlan, rhs: RoutePlaybackPlan) -> Bool {
+        lhs.edges == rhs.edges && lhs.totalDistance == rhs.totalDistance
+    }
+}
+
+/// Output of advancing `RoutePlaybackState` for one simulation tick.
+public struct RouteStepResult {
+    public let coordinate: CLLocationCoordinate2D
+    public let headingDegrees: Double
+    public let upcomingTurnAngleDegrees: Double
+    public let activeEdgeIndex: Int
+    public let trackSegmentIndex: Int
+    public let distanceInActiveEdge: Double
+    public let remainingDistanceMeters: Double
+    public let progress: Double
+    public let reachedEnd: Bool
+    public let jumpedSegmentDiscontinuity: Bool
+    public let completedSegments: [[CLLocationCoordinate2D]]
+    public let remainingSegments: [[CLLocationCoordinate2D]]
+
+    public var completedCoordinates: [CLLocationCoordinate2D] {
+        completedSegments.flatMap { $0 }
+    }
+
+    public var remainingCoordinates: [CLLocationCoordinate2D] {
+        remainingSegments.flatMap { $0 }
+    }
+}
+
+/// Pure, deterministic route progression state machine.
+/// Fixes segment-transition staleness by evaluating `p0`, `p1`, heading, turn angle,
+/// and Great Circle fraction strictly AFTER advancing across zero, one, or multiple edges.
+public struct RoutePlaybackState {
+    public let plan: RoutePlaybackPlan
+    public private(set) var currentEdgeIndex: Int = 0
+    public private(set) var distanceInCurrentEdge: Double = 0.0
+    public private(set) var isFinished: Bool = false
+
+    public init(plan: RoutePlaybackPlan) {
+        self.plan = plan
+        self.isFinished = !plan.isPlayable
+    }
+
+    public mutating func resetForLoop() {
+        currentEdgeIndex = 0
+        distanceInCurrentEdge = 0.0
+        isFinished = !plan.isPlayable
+    }
+
+    /// Heading (degrees) for the currently active edge.
+    public var currentHeadingDegrees: Double {
+        guard !plan.edges.isEmpty else { return 0.0 }
+        let idx = min(currentEdgeIndex, plan.edges.count - 1)
+        return plan.edges[idx].bearingDegrees
+    }
+
+    /// Upcoming corner turn angle (degrees) at the end of the currently active edge,
+    /// returning 0 when approaching the final destination or a GPX track-segment break.
+    public var upcomingTurnAngleDegrees: Double {
+        guard currentEdgeIndex + 1 < plan.edges.count else { return 0.0 }
+        let cur = plan.edges[currentEdgeIndex]
+        let next = plan.edges[currentEdgeIndex + 1]
+        guard cur.trackSegmentIndex == next.trackSegmentIndex else { return 0.0 }
+        return RouteSimulationEngine.turnAngleBetween(bearing1: cur.bearingDegrees, bearing2: next.bearingDegrees)
+    }
+
+    /// Exact coordinate for the current state.
+    public var currentCoordinate: CLLocationCoordinate2D {
+        guard !plan.edges.isEmpty else {
+            return plan.startCoordinate ?? CLLocationCoordinate2D(latitude: 0, longitude: 0)
+        }
+        let edge = plan.edges[min(currentEdgeIndex, plan.edges.count - 1)]
+        if isFinished && currentEdgeIndex == plan.edges.count - 1 {
+            return edge.end
+        }
+        let t = edge.distanceMeters > 1e-6 ? min(1.0, max(0.0, distanceInCurrentEdge / edge.distanceMeters)) : 1.0
+        return RouteSimulationEngine.interpolateGreatCircle(from: edge.start, to: edge.end, fraction: t)
+    }
+
+    /// Advances playback along the route by `stepMeters`, crossing as many edges as needed
+    /// and interpolating along the active post-transition edge.
+    public mutating func advance(byMeters stepMeters: Double) -> RouteStepResult {
+        guard !plan.edges.isEmpty else {
+            let fallback = plan.endCoordinate ?? plan.startCoordinate ?? CLLocationCoordinate2D(latitude: 0, longitude: 0)
+            isFinished = true
+            return RouteStepResult(
+                coordinate: fallback,
+                headingDegrees: 0.0,
+                upcomingTurnAngleDegrees: 0.0,
+                activeEdgeIndex: 0,
+                trackSegmentIndex: 0,
+                distanceInActiveEdge: 0.0,
+                remainingDistanceMeters: 0.0,
+                progress: 1.0,
+                reachedEnd: true,
+                jumpedSegmentDiscontinuity: false,
+                completedSegments: plan.coordinateSegments,
+                remainingSegments: []
+            )
+        }
+
+        let startTrackSegment = plan.edges[min(currentEdgeIndex, plan.edges.count - 1)].trackSegmentIndex
+        var remainingStep = (stepMeters.isFinite && stepMeters > 0.0) ? stepMeters : 0.0
+        var reachedEnd = isFinished
+
+        if !reachedEnd {
+            while remainingStep > 0.0 {
+                let edge = plan.edges[currentEdgeIndex]
+                let remainingInEdge = max(0.0, edge.distanceMeters - distanceInCurrentEdge)
+
+                if remainingStep < remainingInEdge {
+                    distanceInCurrentEdge += remainingStep
+                    remainingStep = 0.0
+                } else {
+                    remainingStep -= remainingInEdge
+                    if currentEdgeIndex < plan.edges.count - 1 {
+                        currentEdgeIndex += 1
+                        distanceInCurrentEdge = 0.0
+                    } else {
+                        currentEdgeIndex = plan.edges.count - 1
+                        distanceInCurrentEdge = edge.distanceMeters
+                        remainingStep = 0.0
+                        reachedEnd = true
+                        break
+                    }
+                }
+            }
+        }
+
+        isFinished = reachedEnd
+        let activeEdge = plan.edges[currentEdgeIndex]
+        let t = (reachedEnd && currentEdgeIndex == plan.edges.count - 1)
+            ? 1.0
+            : (activeEdge.distanceMeters > 1e-6 ? min(1.0, max(0.0, distanceInCurrentEdge / activeEdge.distanceMeters)) : 1.0)
+
+        let coord: CLLocationCoordinate2D
+        if t >= 1.0 {
+            coord = activeEdge.end
+        } else if t <= 0.0 {
+            coord = activeEdge.start
+        } else {
+            coord = RouteSimulationEngine.interpolateGreatCircle(from: activeEdge.start, to: activeEdge.end, fraction: t)
+        }
+
+        let remainingInEdge = max(0.0, activeEdge.distanceMeters - distanceInCurrentEdge)
+        let trailingSuffix = (currentEdgeIndex + 1 < plan.suffixDistances.count) ? plan.suffixDistances[currentEdgeIndex + 1] : 0.0
+        let remainingDistance = reachedEnd ? 0.0 : max(0.0, remainingInEdge + trailingSuffix)
+        let progress = plan.totalDistance > 0.0
+            ? min(1.0, max(0.0, 1.0 - (remainingDistance / plan.totalDistance)))
+            : 1.0
+
+        let turnAngle = upcomingTurnAngleDegrees
+        let jumpedSegment = activeEdge.trackSegmentIndex != startTrackSegment
+
+        let (completedSegs, remainingSegs) = buildSegmentSlices(
+            activeEdge: activeEdge,
+            interpolatedCoord: coord,
+            reachedEnd: reachedEnd
+        )
+
+        return RouteStepResult(
+            coordinate: coord,
+            headingDegrees: activeEdge.bearingDegrees,
+            upcomingTurnAngleDegrees: turnAngle,
+            activeEdgeIndex: currentEdgeIndex,
+            trackSegmentIndex: activeEdge.trackSegmentIndex,
+            distanceInActiveEdge: distanceInCurrentEdge,
+            remainingDistanceMeters: remainingDistance,
+            progress: progress,
+            reachedEnd: reachedEnd,
+            jumpedSegmentDiscontinuity: jumpedSegment,
+            completedSegments: completedSegs,
+            remainingSegments: remainingSegs
+        )
+    }
+
+    private func buildSegmentSlices(
+        activeEdge: RouteEdge,
+        interpolatedCoord: CLLocationCoordinate2D,
+        reachedEnd: Bool
+    ) -> (completed: [[CLLocationCoordinate2D]], remaining: [[CLLocationCoordinate2D]]) {
+        var completed: [[CLLocationCoordinate2D]] = []
+        var remaining: [[CLLocationCoordinate2D]] = []
+
+        for (segIdx, segment) in plan.coordinateSegments.enumerated() {
+            guard !segment.isEmpty else { continue }
+            if segIdx < activeEdge.trackSegmentIndex {
+                completed.append(segment)
+            } else if segIdx > activeEdge.trackSegmentIndex {
+                if !reachedEnd {
+                    remaining.append(segment)
+                } else {
+                    completed.append(segment)
+                }
+            } else {
+                if reachedEnd && segIdx == plan.coordinateSegments.count - 1 {
+                    completed.append(segment)
+                } else {
+                    let prefixEnd = min(activeEdge.localStartPointIndex, segment.count - 1)
+                    var compSeg = Array(segment[0...prefixEnd])
+                    if let last = compSeg.last,
+                       RouteSimulationEngine.haversineDistance(from: last, to: interpolatedCoord) >= 1e-3 {
+                        compSeg.append(interpolatedCoord)
+                    }
+                    completed.append(compSeg)
+
+                    let suffixStart = activeEdge.localStartPointIndex + 1
+                    if suffixStart < segment.count {
+                        var remSeg = [interpolatedCoord]
+                        remSeg.append(contentsOf: segment[suffixStart...])
+                        remaining.append(remSeg)
+                    } else {
+                        remaining.append([interpolatedCoord])
+                    }
+                }
+            }
+        }
+        return (completed, remaining)
+    }
+}
+
+/// Thread-safe session token and single-cleanup lifecycle coordinator for active route tasks.
+/// Prevents cancelled or superseded tasks from mutating newer route state or firing completion celebrations.
+public final class RoutePlaybackSessionController: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activeSessionID: UUID?
+    private var uncleanedSessions: Set<UUID> = []
+    private var completedSessions: Set<UUID> = []
+
+    public init() {}
+
+    /// Starts a new route session and invalidates any previously active session.
+    /// Returns `(newID, supersededSessionIDToCleanup)` so callers can clean up old state at most once.
+    @discardableResult
+    public func beginNewSession() -> (sessionID: UUID, previousNeedingCleanup: UUID?) {
+        lock.lock()
+        defer { lock.unlock() }
+        let prevToCleanup: UUID?
+        if let prev = activeSessionID, uncleanedSessions.remove(prev) != nil {
+            prevToCleanup = prev
+        } else {
+            prevToCleanup = nil
+        }
+        let nextID = UUID()
+        activeSessionID = nextID
+        uncleanedSessions.insert(nextID)
+        // Bound tracked history to avoid unbounded growth across hundreds of start/stops
+        if completedSessions.count > 256 {
+            completedSessions.removeAll()
+        }
+        if uncleanedSessions.count > 256 {
+            uncleanedSessions = [nextID]
+        }
+        return (nextID, prevToCleanup)
+    }
+
+    /// Returns true strictly if `sessionID` is still the current active session and not cancelled.
+    public func isActive(_ sessionID: UUID, taskCancelled: Bool = Task.isCancelled) -> Bool {
+        guard !taskCancelled else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        return activeSessionID == sessionID
+    }
+
+    /// Stops the active session synchronously, claiming cleanup ownership so background tasks cannot double-clean.
+    @discardableResult
+    public func stopActiveSession() -> UUID? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let current = activeSessionID else { return nil }
+        activeSessionID = nil
+        return uncleanedSessions.remove(current)
+    }
+
+    /// Attempts to claim normal route completion for `sessionID`.
+    /// Returns true ONLY if `sessionID` is still active, was not cancelled, and has not already been cleaned or completed.
+    public func claimCompletion(for sessionID: UUID, taskCancelled: Bool = Task.isCancelled) -> Bool {
+        guard !taskCancelled else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        guard activeSessionID == sessionID,
+              !completedSessions.contains(sessionID),
+              uncleanedSessions.contains(sessionID) else {
+            return false
+        }
+        completedSessions.insert(sessionID)
+        uncleanedSessions.remove(sessionID)
+        activeSessionID = nil
+        return true
+    }
+
+    /// Claims cleanup ownership for `sessionID`, returning true at most once per session.
+    public func claimCleanup(for sessionID: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if activeSessionID == sessionID {
+            activeSessionID = nil
+        }
+        return uncleanedSessions.remove(sessionID) != nil
+    }
+
+    public var currentSessionID: UUID? {
+        lock.lock()
+        defer { lock.unlock() }
+        return activeSessionID
+    }
+}
+
