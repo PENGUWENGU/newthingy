@@ -419,197 +419,215 @@ struct ThemeCustomizerSheet: View {
             let puckPt = pointAlongThreePointCurve(p1: p1, p2: p2, p3: p3, t: CGFloat(simProgress))
 
             ZStack {
-                // Tap anywhere to trigger teleport ripple
-                Color.clear
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onEnded { value in
-                                SoundManager.play(.tap)
-                                tapRipplePoint = value.location
-                                tapRippleScale = 0.2
-                                withAnimation(.easeOut(duration: 0.55)) {
-                                    tapRippleScale = 2.2
-                                }
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-                                    tapRipplePoint = nil
-                                }
-                            }
-                    )
+                mapSimTapLayer
+                mapSimPathLayers(p1: p1, p2: p2, p3: p3)
+                mapSimTapRipple
+                mapSimWaypointsOverlay(points: [p1, p2, p3])
+                mapSimPuck(at: puckPt)
+                mapSimChromeOverlays
+            }
+        }
+    }
 
-                // Outer Glow Route Path
-                PlaygroundRouteShape(p1: p1, p2: p2, p3: p3)
-                    .stroke(
-                        LinearGradient(
-                            colors: [activePreview.effectivePrimary.opacity(0.35), activePreview.effectiveSecondary.opacity(0.35)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ),
-                        style: StrokeStyle(lineWidth: activePreview.pathWidth.glowWidth + 3, lineCap: .round, lineJoin: .round)
-                    )
-
-                // Main Route Path
-                PlaygroundRouteShape(p1: p1, p2: p2, p3: p3)
-                    .stroke(
-                        LinearGradient(
-                            colors: [activePreview.effectivePrimary, activePreview.effectiveSecondary],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ),
-                        style: StrokeStyle(lineWidth: activePreview.pathWidth.width, lineCap: .round, lineJoin: .round)
-                    )
-
-                // Marching Animated Dashes
-                PlaygroundRouteShape(p1: p1, p2: p2, p3: p3)
-                    .stroke(
-                        Color.white.opacity(0.75),
-                        style: StrokeStyle(
-                            lineWidth: max(2, activePreview.pathWidth.width * 0.42),
-                            lineCap: .round,
-                            dash: [7, 10],
-                            dashPhase: dashPhase
-                        )
-                    )
-
-                // Tap Ripple
-                if let ripple = tapRipplePoint {
-                    Circle()
-                        .stroke(activePreview.effectiveSecondary, lineWidth: 2)
-                        .frame(width: 36, height: 36)
-                        .scaleEffect(tapRippleScale)
-                        .opacity(Double(2.2 - tapRippleScale))
-                        .position(ripple)
-                }
-
-                // Interactive Waypoint Pins
-                ForEach(Array([p1, p2, p3].enumerated()), id: \.offset) { idx, pt in
-                    Button {
-                        SoundManager.play(.dwell)
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.5)) {
-                            bouncedWaypointIndex = idx
+    @ViewBuilder
+    private var mapSimTapLayer: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onEnded { value in
+                        SoundManager.play(.tap)
+                        tapRipplePoint = value.location
+                        tapRippleScale = 0.2
+                        withAnimation(.easeOut(duration: 0.55)) {
+                            tapRippleScale = 2.2
                         }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                            withAnimation { bouncedWaypointIndex = nil }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                            tapRipplePoint = nil
                         }
-                    } label: {
-                        ZStack {
-                            Circle()
-                                .fill(idx == 2 ? activePreview.effectiveSecondary : activePreview.effectivePrimary)
-                                .frame(width: 22, height: 22)
-                                .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
-                                .shadow(color: .black.opacity(0.4), radius: 3)
-
-                            if activePreview.showWaypointLabels {
-                                Text("\(idx + 1)")
-                                    .font(.system(size: 11, weight: .black, design: .rounded))
-                                    .foregroundStyle(.black)
-                            } else {
-                                Circle()
-                                    .fill(Color.black.opacity(0.65))
-                                    .frame(width: 6, height: 6)
-                            }
-                        }
-                        .scaleEffect(bouncedWaypointIndex == idx ? 1.38 : 1.0)
                     }
-                    .buttonStyle(.plain)
-                    .position(pt)
-                }
+            )
+    }
 
-                // Moving Spoof Puck
+    @ViewBuilder
+    private func mapSimPathLayers(p1: CGPoint, p2: CGPoint, p3: CGPoint) -> some View {
+        let primary = activePreview.effectivePrimary
+        let secondary = activePreview.effectiveSecondary
+
+        PlaygroundRouteShape(p1: p1, p2: p2, p3: p3)
+            .stroke(
+                LinearGradient(
+                    colors: [primary.opacity(0.35), secondary.opacity(0.35)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ),
+                style: StrokeStyle(lineWidth: activePreview.pathWidth.glowWidth + 3, lineCap: .round, lineJoin: .round)
+            )
+
+        PlaygroundRouteShape(p1: p1, p2: p2, p3: p3)
+            .stroke(
+                LinearGradient(
+                    colors: [primary, secondary],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ),
+                style: StrokeStyle(lineWidth: activePreview.pathWidth.width, lineCap: .round, lineJoin: .round)
+            )
+
+        PlaygroundRouteShape(p1: p1, p2: p2, p3: p3)
+            .stroke(
+                Color.white.opacity(0.75),
+                style: StrokeStyle(
+                    lineWidth: max(2, activePreview.pathWidth.width * 0.42),
+                    lineCap: .round,
+                    dash: [7, 10],
+                    dashPhase: dashPhase
+                )
+            )
+    }
+
+    @ViewBuilder
+    private var mapSimTapRipple: some View {
+        if let ripple = tapRipplePoint {
+            Circle()
+                .stroke(activePreview.effectiveSecondary, lineWidth: 2)
+                .frame(width: 36, height: 36)
+                .scaleEffect(tapRippleScale)
+                .opacity(Double(2.2 - tapRippleScale))
+                .position(ripple)
+        }
+    }
+
+    @ViewBuilder
+    private func mapSimWaypointsOverlay(points: [CGPoint]) -> some View {
+        ForEach(Array(points.enumerated()), id: \.offset) { idx, pt in
+            Button {
+                SoundManager.play(.dwell)
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.5)) {
+                    bouncedWaypointIndex = idx
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    withAnimation { bouncedWaypointIndex = nil }
+                }
+            } label: {
                 ZStack {
                     Circle()
-                        .stroke(activePreview.effectivePrimary.opacity(0.65), lineWidth: 2)
-                        .frame(width: 38, height: 38)
-                        .scaleEffect(puckPulse ? 1.32 : 0.82)
-                        .opacity(puckPulse ? 0.15 : 0.85)
+                        .fill(idx == 2 ? activePreview.effectiveSecondary : activePreview.effectivePrimary)
+                        .frame(width: 22, height: 22)
+                        .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+                        .shadow(color: .black.opacity(0.4), radius: 3)
 
-                    Circle()
-                        .fill(activePreview.effectivePrimary.opacity(0.28))
-                        .frame(width: 28, height: 28)
-
-                    Circle()
-                        .fill(activePreview.effectivePrimary)
-                        .frame(width: 13, height: 13)
-                        .overlay(Circle().stroke(Color.white, lineWidth: 2))
-                }
-                .position(puckPt)
-
-                // Top & Bottom Mini Chrome Overlays
-                VStack {
-                    // Mini Top Status & Mode Bar
-                    HStack(spacing: 8) {
+                    if activePreview.showWaypointLabels {
+                        Text("\(idx + 1)")
+                            .font(.system(size: 11, weight: .black, design: .rounded))
+                            .foregroundStyle(.black)
+                    } else {
                         Circle()
-                            .fill(Color.green)
-                            .frame(width: 7, height: 7)
-                        Text(currentSurpriseName ?? activePreview.accentTheme.rawValue)
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(activePreview.effectiveText)
-                            .lineLimit(1)
-
-                        Spacer()
-
-                        Text(session.speedUnit.format(previewTravelMode.baseSpeed))
-                            .font(.caption2.monospacedDigit().weight(.bold))
-                            .foregroundStyle(.black)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(activePreview.effectivePrimary))
+                            .fill(Color.black.opacity(0.65))
+                            .frame(width: 6, height: 6)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(previewPanelBackground(cornerRadius: 12))
-
-                    Spacer()
-
-                    // Interactive Mini Bottom Control Bar
-                    HStack(spacing: 6) {
-                        ForEach([TravelMode.walk, .cycle, .drive]) { mode in
-                            let selected = previewTravelMode == mode
-                            Button {
-                                SoundManager.play(.toggle)
-                                withAnimation(.spring(response: 0.28, dampingFraction: 0.75)) {
-                                    previewTravelMode = mode
-                                }
-                            } label: {
-                                HStack(spacing: 3) {
-                                    Image(systemName: mode.icon)
-                                        .font(.system(size: 10, weight: .bold))
-                                    Text(mode.title)
-                                        .font(.system(size: 10, weight: .bold))
-                                }
-                                .foregroundStyle(selected ? .black : activePreview.effectiveText)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                                .background(
-                                    Capsule().fill(selected ? activePreview.effectivePrimary : Color.white.opacity(0.10))
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-
-                        Spacer()
-
-                        Button {
-                            SoundManager.play(.toggle)
-                            isAutoPlayingSim.toggle()
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: isAutoPlayingSim ? "pause.fill" : "play.fill")
-                                Text(isAutoPlayingSim ? "Simulating" : "Paused")
-                            }
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.black)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 5)
-                            .background(Capsule().fill(activePreview.effectiveSecondary))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(previewPanelBackground(cornerRadius: 14))
                 }
+                .scaleEffect(bouncedWaypointIndex == idx ? 1.38 : 1.0)
             }
+            .buttonStyle(.plain)
+            .position(pt)
+        }
+    }
+
+    @ViewBuilder
+    private func mapSimPuck(at pt: CGPoint) -> some View {
+        ZStack {
+            Circle()
+                .stroke(activePreview.effectivePrimary.opacity(0.65), lineWidth: 2)
+                .frame(width: 38, height: 38)
+                .scaleEffect(puckPulse ? 1.32 : 0.82)
+                .opacity(puckPulse ? 0.15 : 0.85)
+
+            Circle()
+                .fill(activePreview.effectivePrimary.opacity(0.28))
+                .frame(width: 28, height: 28)
+
+            Circle()
+                .fill(activePreview.effectivePrimary)
+                .frame(width: 13, height: 13)
+                .overlay(Circle().stroke(Color.white, lineWidth: 2))
+        }
+        .position(pt)
+    }
+
+    @ViewBuilder
+    private var mapSimChromeOverlays: some View {
+        VStack {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 7, height: 7)
+                Text(currentSurpriseName ?? activePreview.accentTheme.rawValue)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(activePreview.effectiveText)
+                    .lineLimit(1)
+
+                Spacer()
+
+                Text(session.speedUnit.format(previewTravelMode.baseSpeed))
+                    .font(.caption2.monospacedDigit().weight(.bold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(activePreview.effectivePrimary))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(previewPanelBackground(cornerRadius: 12))
+
+            Spacer()
+
+            HStack(spacing: 6) {
+                ForEach([TravelMode.walk, .cycle, .drive]) { mode in
+                    let selected = previewTravelMode == mode
+                    Button {
+                        SoundManager.play(.toggle)
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.75)) {
+                            previewTravelMode = mode
+                        }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: mode.icon)
+                                .font(.system(size: 10, weight: .bold))
+                            Text(mode.title)
+                                .font(.system(size: 10, weight: .bold))
+                        }
+                        .foregroundStyle(selected ? .black : activePreview.effectiveText)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(
+                            Capsule().fill(selected ? activePreview.effectivePrimary : Color.white.opacity(0.10))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer()
+
+                Button {
+                    SoundManager.play(.toggle)
+                    isAutoPlayingSim.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: isAutoPlayingSim ? "pause.fill" : "play.fill")
+                        Text(isAutoPlayingSim ? "Simulating" : "Paused")
+                    }
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(activePreview.effectiveSecondary))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(previewPanelBackground(cornerRadius: 14))
         }
     }
 

@@ -779,10 +779,12 @@ final class SpoofSession: ObservableObject {
         loopCoords.append(loopCoords[0])
 
         let sampled = RouteBuilder.sample(coordinates: loopCoords, every: 12.0)
+        guard let firstPoint = sampled.first else { return }
+        let midPoint = sampled[sampled.count / 2]
         let waypoints = [
-            RouteWaypoint(coordinate: sampled[0], title: "Start Loop"),
-            RouteWaypoint(coordinate: sampled[sampled.count / 2], title: "Midpoint"),
-            RouteWaypoint(coordinate: sampled[0], title: "End Loop")
+            RouteWaypoint(coordinate: firstPoint, title: "Start Loop"),
+            RouteWaypoint(coordinate: midPoint, title: "Midpoint"),
+            RouteWaypoint(coordinate: firstPoint, title: "End Loop")
         ]
 
         followRoute(

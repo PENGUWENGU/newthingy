@@ -223,15 +223,19 @@ final class LocusBackupManager {
 
     /// Share sheet launcher for export file.
     func presentShareSheet(with fileURL: URL) {
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let rootVC = windowScene.windows.first?.rootViewController else { return }
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
+        var presenter = (windowScene.windows.first { $0.isKeyWindow } ?? windowScene.windows.first)?.rootViewController
+        while let presented = presenter?.presentedViewController {
+            presenter = presented
+        }
+        guard let presenter else { return }
 
         let activityVC = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
         if let popover = activityVC.popoverPresentationController {
-            popover.sourceView = rootVC.view
-            popover.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: rootVC.view.bounds.midY, width: 0, height: 0)
+            popover.sourceView = presenter.view
+            popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 0, height: 0)
             popover.permittedArrowDirections = []
         }
-        rootVC.present(activityVC, animated: true)
+        presenter.present(activityVC, animated: true)
     }
 }

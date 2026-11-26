@@ -1141,72 +1141,89 @@ struct MapHomeView: View {
     @MapContentBuilder
     private var routePolylines: some MapContent {
         if session.isFollowingRoute && (!session.remainingRouteSegments.isEmpty || !session.remainingRouteCoordinates.isEmpty) {
-            let compSegments = session.completedRouteSegments.isEmpty
-                ? (session.completedRouteCoordinates.isEmpty ? [] : [session.completedRouteCoordinates])
-                : session.completedRouteSegments
-            let remSegments = session.remainingRouteSegments.isEmpty
-                ? (session.remainingRouteCoordinates.isEmpty ? [] : [session.remainingRouteCoordinates])
-                : session.remainingRouteSegments
-
-            ForEach(Array(compSegments.enumerated()), id: \.offset) { _, segment in
-                if segment.count > 1 {
-                    MapPolyline(coordinates: segment)
-                        .stroke(
-                            routeMethod == .freehand ? LocusTheme.accentSecondary.opacity(0.3) : LocusTheme.accent.opacity(0.3),
-                            style: StrokeStyle(lineWidth: max(3, session.pathWidth.width - 1.5), lineCap: .round, lineJoin: .round, dash: [6, 4])
-                        )
-                }
-            }
-
-            ForEach(Array(remSegments.enumerated()), id: \.offset) { _, segment in
-                if segment.count > 1 {
-                    MapPolyline(coordinates: segment)
-                        .stroke(
-                            (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.35),
-                            style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
-                        )
-
-                    MapPolyline(coordinates: segment)
-                        .stroke(
-                            routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
-                            style: StrokeStyle(lineWidth: session.pathWidth.width, lineCap: .round, lineJoin: .round)
-                        )
-
-                    MapPolyline(coordinates: segment)
-                        .stroke(
-                            Color.white.opacity(session.isRoutePaused ? 0.25 : 0.75),
-                            style: StrokeStyle(
-                                lineWidth: max(2, session.pathWidth.width * 0.45),
-                                lineCap: .round,
-                                lineJoin: .round,
-                                dash: [8, 12],
-                                dashPhase: pathDashPhase
-                            )
-                        )
-                }
-            }
+            activeRoutePolylines
         } else if displayRouteSegments.contains(where: { $0.count > 1 }) {
-            ForEach(Array(displayRouteSegments.enumerated()), id: \.offset) { _, segment in
-                if segment.count > 1 {
-                    MapPolyline(coordinates: segment)
-                        .stroke(
-                            (routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent).opacity(0.25),
-                            style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
-                        )
+            previewRoutePolylines
+        }
 
-                    MapPolyline(coordinates: segment)
-                        .stroke(
-                            routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent,
-                            style: StrokeStyle(
-                                lineWidth: session.pathWidth.width,
-                                lineCap: .round,
-                                lineJoin: .round
-                            )
-                        )
-                }
+        freehandDraftPolyline
+    }
+
+    @MapContentBuilder
+    private var activeRoutePolylines: some MapContent {
+        let compSegments = session.completedRouteSegments.isEmpty
+            ? (session.completedRouteCoordinates.isEmpty ? [] : [session.completedRouteCoordinates])
+            : session.completedRouteSegments
+        let remSegments = session.remainingRouteSegments.isEmpty
+            ? (session.remainingRouteCoordinates.isEmpty ? [] : [session.remainingRouteCoordinates])
+            : session.remainingRouteSegments
+        let strokeTint = routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent
+
+        ForEach(Array(compSegments.enumerated()), id: \.offset) { _, segment in
+            if segment.count > 1 {
+                MapPolyline(coordinates: segment)
+                    .stroke(
+                        strokeTint.opacity(0.3),
+                        style: StrokeStyle(lineWidth: max(3, session.pathWidth.width - 1.5), lineCap: .round, lineJoin: .round, dash: [6, 4])
+                    )
             }
         }
 
+        ForEach(Array(remSegments.enumerated()), id: \.offset) { _, segment in
+            if segment.count > 1 {
+                MapPolyline(coordinates: segment)
+                    .stroke(
+                        strokeTint.opacity(0.35),
+                        style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
+                    )
+
+                MapPolyline(coordinates: segment)
+                    .stroke(
+                        strokeTint,
+                        style: StrokeStyle(lineWidth: session.pathWidth.width, lineCap: .round, lineJoin: .round)
+                    )
+
+                MapPolyline(coordinates: segment)
+                    .stroke(
+                        Color.white.opacity(session.isRoutePaused ? 0.25 : 0.75),
+                        style: StrokeStyle(
+                            lineWidth: max(2, session.pathWidth.width * 0.45),
+                            lineCap: .round,
+                            lineJoin: .round,
+                            dash: [8, 12],
+                            dashPhase: pathDashPhase
+                        )
+                    )
+            }
+        }
+    }
+
+    @MapContentBuilder
+    private var previewRoutePolylines: some MapContent {
+        let strokeTint = routeMethod == .freehand ? LocusTheme.accentSecondary : LocusTheme.accent
+        ForEach(Array(displayRouteSegments.enumerated()), id: \.offset) { _, segment in
+            if segment.count > 1 {
+                MapPolyline(coordinates: segment)
+                    .stroke(
+                        strokeTint.opacity(0.25),
+                        style: StrokeStyle(lineWidth: session.pathWidth.glowWidth, lineCap: .round, lineJoin: .round)
+                    )
+
+                MapPolyline(coordinates: segment)
+                    .stroke(
+                        strokeTint,
+                        style: StrokeStyle(
+                            lineWidth: session.pathWidth.width,
+                            lineCap: .round,
+                            lineJoin: .round
+                        )
+                    )
+            }
+        }
+    }
+
+    @MapContentBuilder
+    private var freehandDraftPolyline: some MapContent {
         if routeModeActive && routeMethod == .freehand && freehandCoordinates.count > 1 && calculatedRoute.isEmpty {
             MapPolyline(coordinates: freehandCoordinates)
                 .stroke(

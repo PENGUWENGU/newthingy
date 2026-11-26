@@ -147,7 +147,9 @@ final class PairOnDeviceService: ObservableObject {
         audioKeepAlive.start()
         guard backgroundTask == .invalid else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "locus.pairable-host") { [weak self] in
-            self?.endKeepAlive()
+            Task { @MainActor [weak self] in
+                self?.endKeepAlive()
+            }
         }
     }
 

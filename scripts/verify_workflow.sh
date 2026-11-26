@@ -60,10 +60,15 @@ else
   else
     echo "✅ Exactly 1 unsigned IPA artifact configured in $WORKFLOW"
   fi
+  # 2b. Verify XcodeGen download is unzipped in workflow
+  if grep -q "xcodegen.zip" "$WORKFLOW" && ! grep -q "unzip.*xcodegen\.zip" "$WORKFLOW"; then
+    echo "❌ $WORKFLOW downloads xcodegen.zip without unzipping it"
+    ERRORS=$((ERRORS + 1))
+  fi
   echo "✅ $WORKFLOW conforms to modern CI standards"
 fi
 
-# 3. Verify project.yml
+# 3. Verify project.yml and build_ipa.sh safeguards
 if [ ! -f "project.yml" ]; then
   echo "❌ Missing project.yml"
   ERRORS=$((ERRORS + 1))
@@ -78,6 +83,17 @@ else
     ERRORS=$((ERRORS + 1))
   fi
   echo "✅ project.yml signing and target configuration verified"
+fi
+
+if [ -f "scripts/build_ipa.sh" ]; then
+  if grep -q "xcodegen_bin" scripts/build_ipa.sh; then
+    echo "❌ scripts/build_ipa.sh contains broken xcodegen_bin fallback"
+    ERRORS=$((ERRORS + 1))
+  fi
+  if grep -q "Existing Locus\.xcodeproj will be used" scripts/build_ipa.sh; then
+    echo "❌ scripts/build_ipa.sh silently falls back to stale Locus.xcodeproj"
+    ERRORS=$((ERRORS + 1))
+  fi
 fi
 
 # 4. Verify critical app assets & widget extensions
@@ -113,6 +129,10 @@ if grep -rn "\.coordinate\.clCoordinate" Locus/ >/dev/null 2>&1; then
 fi
 if grep -rn "public struct SpoofSessionSnapshot" Locus/ >/dev/null 2>&1; then
   echo "❌ Detected public struct using internal types in SpoofSessionSnapshot"
+  ERRORS=$((ERRORS + 1))
+fi
+if grep -rn -A3 "beginBackgroundTask(" Locus/ | grep -q "self?\.end" && ! grep -rn -A3 "beginBackgroundTask(" Locus/ | grep -q "@MainActor"; then
+  echo "❌ Detected beginBackgroundTask handler calling @MainActor method without Task { @MainActor }"
   ERRORS=$((ERRORS + 1))
 fi
 echo "✅ Swift source code sanity verified"

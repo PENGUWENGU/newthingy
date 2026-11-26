@@ -53,15 +53,24 @@ if ! command -v xcodegen >/dev/null 2>&1; then
   mkdir -p /tmp/xcodegen_install
   if curl -sSL -f --connect-timeout 15 --retry 2 "https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip" -o /tmp/xcodegen_install/xcodegen.zip; then
     unzip -qo /tmp/xcodegen_install/xcodegen.zip -d /tmp/xcodegen_install
-    if [ -f "/tmp/xcodegen_install/xcodegen/install.sh" ]; then
+    XCG_ROOT="/tmp/xcodegen_install/xcodegen"
+    if [ ! -d "$XCG_ROOT" ] && [ -d "/tmp/xcodegen_install/bin" ]; then
+      XCG_ROOT="/tmp/xcodegen_install"
+    fi
+    if [ -f "$XCG_ROOT/install.sh" ]; then
       echo "Running XcodeGen install.sh to install binaries and SettingPresets..."
-      sudo bash "/tmp/xcodegen_install/xcodegen/install.sh" 2>/dev/null || {
-        sudo cp -r /tmp/xcodegen_install/xcodegen/bin/* /usr/local/bin/ 2>/dev/null || cp "/tmp/xcodegen_install/xcodegen/bin/xcodegen" "$ROOT_DIR/xcodegen_bin"
-        sudo cp -r /tmp/xcodegen_install/xcodegen/share/* /usr/local/share/ 2>/dev/null || true
-      }
-      if [ -f "$ROOT_DIR/xcodegen_bin" ]; then
-        chmod +x "$ROOT_DIR/xcodegen_bin"
-        export PATH="$ROOT_DIR:$PATH"
+      (cd "$XCG_ROOT" && sudo bash "./install.sh" 2>/dev/null) || true
+    fi
+    if ! command -v xcodegen >/dev/null 2>&1 && [ -f "$XCG_ROOT/bin/xcodegen" ]; then
+      if sudo cp -f "$XCG_ROOT/bin/xcodegen" /usr/local/bin/xcodegen 2>/dev/null; then
+        sudo chmod +x /usr/local/bin/xcodegen || true
+        [ -d "$XCG_ROOT/share" ] && sudo cp -R "$XCG_ROOT/share/." /usr/local/share/ 2>/dev/null || true
+      else
+        mkdir -p /tmp/xcodegen_local/bin /tmp/xcodegen_local/share
+        cp -f "$XCG_ROOT/bin/xcodegen" /tmp/xcodegen_local/bin/xcodegen
+        chmod +x /tmp/xcodegen_local/bin/xcodegen
+        [ -d "$XCG_ROOT/share" ] && cp -R "$XCG_ROOT/share/." /tmp/xcodegen_local/share/ 2>/dev/null || true
+        export PATH="/tmp/xcodegen_local/bin:$PATH"
       fi
     fi
   fi
@@ -77,8 +86,9 @@ fi
 
 if command -v xcodegen >/dev/null 2>&1; then
   echo "XcodeGen version: $(xcodegen version 2>/dev/null || echo 'installed')"
-else
-  echo "Warning: xcodegen command could not be installed. Existing Locus.xcodeproj will be used if present."
+elif [ -f "project.yml" ]; then
+  echo "ERROR: xcodegen is required to generate Locus.xcodeproj from project.yml (stale .pbxproj cannot be used safely)." >&2
+  exit 1
 fi
 
 # ------------------------------------------------------------------------------
@@ -130,7 +140,11 @@ fi
 # 4. Generate Xcode project with XcodeGen if available
 # ------------------------------------------------------------------------------
 echo "--- 4. Preparing Xcode project ---"
-if command -v xcodegen >/dev/null 2>&1 && [ -f "project.yml" ]; then
+if [ -f "project.yml" ]; then
+  if ! command -v xcodegen >/dev/null 2>&1; then
+    echo "ERROR: project.yml is present but xcodegen is missing!" >&2
+    exit 1
+  fi
   echo "Generating Locus.xcodeproj from project.yml..."
   rm -rf Locus.xcodeproj
   xcodegen generate --spec project.yml
@@ -318,10 +332,15 @@ if [ ! -f "$STAGED_EXEC" ] || [ ! -s "$STAGED_EXEC" ]; then
 fi
 chmod +x "$STAGED_EXEC"
 
-# Ensure ad-hoc signature on staged bundle if codesign is available on host
+# Ensure ad-hoc signature on nested plugins first, then main app bundle (inside-out signing)
 if command -v codesign >/dev/null 2>&1; then
-  echo "Applying ad-hoc signature to Payload/Locus.app..."
-  codesign --force --deep --sign - "$PAYLOAD_DIR/Locus.app" 2>/dev/null || true
+  echo "Applying ad-hoc signatures inside-out to Payload/Locus.app..."
+  if [ -d "$PAYLOAD_DIR/Locus.app/PlugIns" ]; then
+    find "$PAYLOAD_DIR/Locus.app/PlugIns" -maxdepth 1 -name "*.appex" -type d | while read -r appex; do
+      codesign --force --sign - "$appex" 2>/dev/null || true
+    done
+  fi
+  codesign --force --sign - "$PAYLOAD_DIR/Locus.app" 2>/dev/null || true
 fi
 
 IPA_NAME="LocusPlus-unsigned.ipa"
@@ -329,6 +348,7 @@ IPA_NAME="LocusPlus-unsigned.ipa"
 rm -f "$ROOT_DIR/$IPA_NAME" "$ROOT_DIR/Locus-unsigned.ipa"
 echo "Creating $IPA_NAME..."
 /usr/bin/zip -qry "$ROOT_DIR/$IPA_NAME" Payload
+rm -rf "$PAYLOAD_DIR"
 
 # ------------------------------------------------------------------------------
 # 9. Strict Verification of IPA Archive Contents

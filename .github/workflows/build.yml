@@ -120,14 +120,21 @@ jobs:
             echo "Installing precompiled XcodeGen..."
             mkdir -p /tmp/xcodegen_dl
             if curl -sSL -f --connect-timeout 15 --retry 2 "https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip" -o /tmp/xcodegen_dl/xcodegen.zip; then
-              if [ -f "/tmp/xcodegen_dl/xcodegen/install.sh" ]; then
-                sudo bash "/tmp/xcodegen_dl/xcodegen/install.sh" 2>/dev/null || {
-                  sudo cp -r /tmp/xcodegen_dl/xcodegen/bin/* /usr/local/bin/ || true
-                  sudo cp -r /tmp/xcodegen_dl/xcodegen/share/* /usr/local/share/ || true
-                }
-              else
-                sudo cp -r /tmp/xcodegen_dl/xcodegen/bin/* /usr/local/bin/ || true
-                sudo cp -r /tmp/xcodegen_dl/xcodegen/share/* /usr/local/share/ || true
+              /usr/bin/unzip -qo /tmp/xcodegen_dl/xcodegen.zip -d /tmp/xcodegen_dl
+              XCG_ROOT="/tmp/xcodegen_dl/xcodegen"
+              if [ ! -d "$XCG_ROOT" ] && [ -d "/tmp/xcodegen_dl/bin" ]; then
+                XCG_ROOT="/tmp/xcodegen_dl"
+              fi
+              if [ -f "$XCG_ROOT/install.sh" ]; then
+                (cd "$XCG_ROOT" && sudo bash "./install.sh") || true
+              fi
+              if ! command -v xcodegen >/dev/null 2>&1 && [ -f "$XCG_ROOT/bin/xcodegen" ]; then
+                sudo mkdir -p /usr/local/bin /usr/local/share
+                sudo cp -f "$XCG_ROOT/bin/xcodegen" /usr/local/bin/xcodegen
+                sudo chmod +x /usr/local/bin/xcodegen
+                if [ -d "$XCG_ROOT/share" ]; then
+                  sudo cp -R "$XCG_ROOT/share/." /usr/local/share/ || true
+                fi
               fi
               rm -rf /tmp/xcodegen_dl
             fi
